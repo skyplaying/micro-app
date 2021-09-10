@@ -1,6 +1,6 @@
 微前端的渲染离不开路由，所以需要说明一下路由配置的注意点和常会遇到的问题。
 
-### url属性和子应用路由的关系
+## url属性和子应用路由的关系
 答：没有关系！
 
 micro-app不是iframe，不会重开一个window窗口，基座应用和子应用本质是在同一个页面渲染，所以影响到子应用路由的是浏览器地址。micro-app的url属性只是html的地址，它只是用来获取html。
@@ -42,7 +42,7 @@ micro-app不是iframe，不会重开一个window窗口，基座应用和子应�
 
 micro-app配置如下：
 ```html
-<!-- 此时不需要设置baseurl -->
+<!-- 此时不需要设置baseroute -->
 <micro-app url='http://www.xxx.com/'></micro-app>
 ```
 
@@ -59,12 +59,12 @@ micro-app配置如下：
 
 这就是在[快速开始](/zh-cn/start)一章中提到的案例。
 ```html
-<!-- 子应用通过baseurl设置路由前缀，路由 /page1 就变为 /my-page/page1 -->
-<micro-app url='http://www.xxx.com/' baseurl='/my-page'></micro-app>
+<!-- 子应用通过baseroute设置路由前缀，路由 /page1 就变为 /my-page/page1 -->
+<micro-app url='http://www.xxx.com/' baseroute='/my-page'></micro-app>
 ```
 
 
-### 路由配置
+## 路由配置
 
 路由配置非常容易出问题，我们列出了一些注意点：
 
@@ -72,20 +72,20 @@ micro-app配置如下：
 - 1、基座是hash路由，子应用也必须是hash路由
 - 2、基座是history路由，子应用可以是hash或history路由
 
-#### 路由前缀 -- `baseurl`
+#### 路由前缀 -- `baseroute`
 **作用：**
 
-通常基座应用和子应用各有一套路由系统，为了防止相互冲突，基座需要分配一个路由给子应用，子应用可以在基座应用分配的路由下自由愉快的玩耍，但不能超出这个路由的范围，这就是baseurl的作用。
+通常基座应用和子应用各有一套路由系统，为了防止相互冲突，基座需要分配一个路由给子应用，子应用可以在基座应用分配的路由下自由愉快的玩耍，但不能超出这个路由的范围，这就是baseroute的作用。
 
 **注意点：**
-- 1、如果基座是history路由，子应用是hash路由，不需要设置路由前缀baseurl
-- 2、如果子应用只有一个页面，没有使用`react-router`，`vue-router`之类，也不需要设置路由前缀baseurl
+- 1、如果基座是history路由，子应用是hash路由，不需要设置路由前缀baseroute
+- 2、如果子应用只有一个页面，没有使用`react-router`，`vue-router`之类，也不需要设置路由前缀baseroute
 - 3、vue-router在hash模式下不支持置base添加路由前缀，需要创建一个空的路由页面，将其它路由作为它的children
 
 ```js
 const routes = [
     {
-      path: window.__MICRO_APP_BASE_URL__ || '/',
+      path: window.__MICRO_APP_BASE_ROUTE__ || '/',
       component: Home,
       children: [
         // 其他的路由都写到这里
@@ -112,7 +112,7 @@ export default function AppRoute () {
     <BrowserRouter>
       <Switch>
         // 非严格匹配，/child/* 都将匹配到ChildPage组件
-        // /child 就是分配给子应用的路由前缀baseurl
+        // /child 就是分配给子应用的路由前缀baseroute
         <Route path='/child'>
           <ChildPage />
         </Route>
@@ -127,7 +127,7 @@ export function ChildPage () {
   return (
     <div>
       <h1>子应用</h1>
-      <micro-app name='child-app' url='http://localhost:3000/' baseurl='/child'></micro-app>
+      <micro-app name='child-app' url='http://localhost:3000/' baseroute='/child'></micro-app>
     </div>
   )
 }
@@ -139,8 +139,8 @@ import { BrowserRouter, Switch, Route } from 'react-router-dom'
 
 export default function AppRoute () {
   return (
-    // 👇👇 添加路由前缀，子应用可以通过window.__MICRO_APP_BASE_URL__获取基座下发的baseurl，如果没有设置baseurl属性，则此值默认为空字符串
-    <BrowserRouter basename={window.__MICRO_APP_BASE_URL__ || '/'}>
+    // 👇👇 添加路由前缀，子应用可以通过window.__MICRO_APP_BASE_ROUTE__获取基座下发的baseroute，如果没有设置baseroute属性，则此值默认为空字符串
+    <BrowserRouter basename={window.__MICRO_APP_BASE_ROUTE__ || '/'}>
       <Switch>
         ...
       </Switch>
@@ -167,7 +167,7 @@ Vue.use(VueRouter)
 const routes = [
   {
     // /child/* 都将匹配到ChildPage组件
-    // /child 就是分配给子应用的路由前缀baseurl
+    // /child 就是分配给子应用的路由前缀baseroute
     path: '/child/*',  // vue-router@4.x path的写法为：'/child/:page*'
     name: 'child',
     component: ChildPage,
@@ -180,7 +180,7 @@ export default routes
 <template>
   <div>
     <h1>子应用</h1>
-    <micro-app name='child-app' url='http://localhost:3000/' baseurl='/child'></micro-app>
+    <micro-app name='child-app' url='http://localhost:3000/' baseroute='/child'></micro-app>
   </div>
 </template>
 
@@ -198,8 +198,8 @@ import VueRouter from 'vue-router'
 import routes from './router'
 
 const router = new VueRouter({
-  // 👇👇 添加路由前缀，子应用可以通过window.__MICRO_APP_BASE_URL__获取基座下发的baseurl，如果没有设置baseurl属性，则此值默认为空字符串
-  base: window.__MICRO_APP_BASE_URL__ || '/',
+  // 👇👇 添加路由前缀，子应用可以通过window.__MICRO_APP_BASE_ROUTE__获取基座下发的baseroute，如果没有设置baseroute属性，则此值默认为空字符串
+  base: window.__MICRO_APP_BASE_ROUTE__ || '/',
   routes,
 })
 
@@ -211,10 +211,10 @@ let app = new Vue({
 <!-- tabs:end -->
 
 > [!TIP]
-> vue-router@4设置baseURL的方式请查看 https://next.router.vuejs.org/
+> vue-router@4.x设置base的方式请查看 https://next.router.vuejs.org/
 
 
-### 应用之间如何跳转
+## 应用之间如何跳转
 因为每个应用的路由实例都是不同的，路由实例只能控制自身，无法影响其它应用，要实现应用之间的跳转有两种方式：
 
 ### 1、history.pushState(replaceState)
@@ -237,7 +237,9 @@ window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
 ```
 
 > [!NOTE]
-> popstate事件是全局发送的，所有应用（包括发送popstate事件的应用）都会接受到popstate事件并进行路由匹配，此时要注意和兜底路由的冲突。
+> 1、popstate事件是全局发送的，所有正在运行的应用（包括发送popstate事件的应用）都会接受到popstate事件并进行路由匹配，此时要注意和兜底路由的冲突。
+>
+> 2、一些框架(比如angular)对popstate支持性不好，此时建议使用下面的方式2进行跳转。
 
 ### 2、数据通信进行控制
 如基座下发指令控制子应用进行跳转，或者子应用向基座应用上传一个可以控制自身路由的函数。
