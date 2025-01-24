@@ -15,7 +15,7 @@
 子应用卸载时触发。
 
 #### 5. error
-子应用渲染出错时触发，只有会导致渲染终止的错误才会触发此生命周期。
+子应用加载出错时触发，只有会导致渲染终止的错误才会触发此生命周期。
 
 
 ## 监听生命周期
@@ -37,10 +37,10 @@ import jsxCustomEvent from '@micro-zoe/micro-app/polyfill/jsx-custom-event'
   name='xx'
   url='xx'
   onCreated={() => console.log('micro-app元素被创建')}
-  onBeforemount={() => console.log('即将被渲染')}
+  onBeforemount={() => console.log('即将渲染')}
   onMounted={() => console.log('已经渲染完成')}
   onUnmount={() => console.log('已经卸载')}
-  onError={() => console.log('渲染出错')}
+  onError={() => console.log('加载出错')}
 />
 ```
 
@@ -63,19 +63,19 @@ vue中监听方式和普通事件一致。
 export default {
   methods: {
     created () {
-      console.log('micro-app元素被创建'),
+      console.log('micro-app元素被创建')
     },
     beforemount () {
-      console.log('即将被渲染'),
+      console.log('即将渲染')
     },
     mounted () {
-      console.log('已经渲染完成'),
+      console.log('已经渲染完成')
     },
     unmount () {
-      console.log('已经卸载'),
+      console.log('已经卸载')
     },
     error () {
-      console.log('渲染出错'),
+      console.log('加载出错')
     }
   }
 }
@@ -117,35 +117,59 @@ import microApp from '@micro-zoe/micro-app'
 
 microApp.start({
   lifeCycles: {
-    created (e) {
-      console.log('created')
+    created (e, appName) {
+      console.log(`子应用${appName}被创建`)
     },
-    beforemount (e) {
-      console.log('beforemount')
+    beforemount (e, appName) {
+      console.log(`子应用${appName}即将渲染`)
     },
-    mounted (e) {
-      console.log('mounted')
+    mounted (e, appName) {
+      console.log(`子应用${appName}已经渲染完成`)
     },
-    unmount (e) {
-      console.log('unmount')
+    unmount (e, appName) {
+      console.log(`子应用${appName}已经卸载`)
     },
-    error (e) {
-      console.log('error')
+    error (e, appName) {
+      console.log(`子应用${appName}加载出错`)
     }
   }
 })
 ```
 
-## 子应用卸载
-对于子应用只有两个生命周期，挂载和卸载。
+## 全局事件
+在子应用的加载过程中，micro-app会向子应用发送一系列事件，包括渲染、卸载等事件。
 
-**挂载**：子应用的js被执行则为挂载，所以不需要特殊的监听，一般在入口js文件中进行挂载相关操作。
-
-**卸载**：子应用被卸载时会接受到一个名为`unmount`的事件，开发者可以在此进行卸载相关操作。
+#### 渲染事件
+通过向window注册onmount函数，可以监听子应用的渲染事件。
 
 ```js
-// 子应用卸载
+/**
+ * 应用渲染时执行
+ * @param data 初始化数据
+ */
+window.onmount = (data) => {
+  console.log('子应用已经渲染', data)
+}
+```
+
+#### 卸载事件
+通过向window注册onunmount函数，可以监听子应用的卸载事件。
+
+```js
+/**
+ * 应用卸载时执行
+ */
+window.onunmount = () => {
+  // 执行卸载相关操作
+  console.log('子应用已经卸载')
+}
+```
+
+还可以通过window.addEventListener监听子应用的卸载事件unmount。
+```js
 window.addEventListener('unmount', function () {
   // 执行卸载相关操作
+  console.log('子应用已经卸载')
 })
 ```
+

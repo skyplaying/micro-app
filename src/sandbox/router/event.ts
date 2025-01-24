@@ -1,14 +1,33 @@
-import type { MicroLocation } from '@micro-app/types'
-import { appInstanceMap } from '../../create_app'
-import { getActiveApps } from '../../micro_app'
-import { formatEventName } from '../effect'
-import { getMicroPathFromURL, getMicroState } from './core'
-import { updateMicroLocation } from './location'
+import type {
+  MicroLocation,
+  PopStateListener,
+  MicroPopStateEvent,
+  microAppWindowType,
+} from '@micro-app/types'
+import {
+  appInstanceMap,
+  isIframeSandbox,
+} from '../../create_app'
+import {
+  getActiveApps,
+} from '../../micro_app'
+import {
+  getMicroPathFromURL,
+  getMicroState,
+  getMicroRouterInfoState,
+  isEffectiveApp,
+  isRouterModeCustom,
+} from './core'
+import {
+  updateMicroLocation,
+} from './location'
+import {
+  removeDomScope,
+  isFunction,
+  macro,
+  getRootContainer,
+} from '../../libs/utils'
 import globalEnv from '../../libs/global_env'
-import { removeDomScope } from '../../libs/utils'
-
-type PopStateListener = (this: Window, e: PopStateEvent) => void
-type MicroPopStateEvent = PopStateEvent & { onlyForBrowser?: boolean }
 
 /**
  * dispatch PopStateEvent & HashChangeEvent to child app
@@ -25,28 +44,40 @@ export function addHistoryListener (appName: string): CallableFunction {
      * 1. unmount app & hidden keep-alive app will not receive popstate event
      * 2. filter out onlyForBrowser
      */
-    if (getActiveApps(true).includes(appName) && !e.onlyForBrowser) {
-      const microPath = getMicroPathFromURL(appName)
-      const app = appInstanceMap.get(appName)!
-      const proxyWindow = app.sandBox!.proxyWindow
-      let isHashChange = false
-      // for hashChangeEvent
-      const oldHref = proxyWindow.location.href
-      // Do not attach micro state to url when microPath is empty
-      if (microPath) {
-        const oldHash = proxyWindow.location.hash
-        updateMicroLocation(appName, microPath, proxyWindow.location as MicroLocation)
-        isHashChange = proxyWindow.location.hash !== oldHash
+    if (
+      getActiveApps({
+        excludeHiddenApp: true,
+        excludePreRender: true,
+      }).includes(appName) &&
+      !e.onlyForBrowser
+    ) {
+      /**
+       * base app may respond to popstateEvent async(lazy load page & browser back/forward), but child app will respond to popstateEvent immediately(vue2, react), this will cause some problems
+       * 2 solutions:
+       *  1. child app respond to popstateEvent async -- router-event-delay
+       *  2. child app will not respond to popstateEvent in some scenarios (history.state===null || history.state?__MICRO_APP_STATE__[appName])
+       * NOTE 1:
+       *  1. browser back/forward
+       *  2. location.hash/search/pathname = xxx
+       *  3. <a href="/#/xxx">, <a href="/xxx">
+       *  4. history.back/go/forward
+       *  5. history.pushState/replaceState
+       *
+       * NOTE2:
+       *  1、react16 hash mode navigate by location.hash = xxx, history.state is always null, but react16 respond to popstateEvent sync
+       *  2、multiple child apps may has problems
+       */
+      if (
+        !isRouterModeCustom(appName) ||
+        !globalEnv.rawWindow.history.state ||
+        getMicroRouterInfoState(appName)
+      ) {
+        const container = appInstanceMap.get(appName)?.container
+        macro(
+          () => updateMicroLocationWithEvent(appName, getMicroPathFromURL(appName)),
+          (container && getRootContainer(container))?.getRouterEventDelay() ?? 0
+        )
       }
-
-      // dispatch formatted popStateEvent to child
-      dispatchPopStateEventToMicroApp(appName, proxyWindow)
-
-      // dispatch formatted hashChangeEvent to child when hash change
-      if (isHashChange) dispatchHashChangeEventToMicroApp(appName, proxyWindow, oldHref)
-
-      // clear element scope before trigger event of next app
-      removeDomScope()
     }
   }
 
@@ -54,6 +85,43 @@ export function addHistoryListener (appName: string): CallableFunction {
 
   return () => {
     rawWindow.removeEventListener('popstate', popStateHandler)
+  }
+}
+
+/**
+ * Effect: use to trigger child app jump
+ * Actions:
+ *  1. update microLocation with target path
+ *  2. dispatch popStateEvent & hashChangeEvent
+ * @param appName app name
+ * @param targetFullPath target path of child app
+ */
+export function updateMicroLocationWithEvent (
+  appName: string,
+  targetFullPath: string | null,
+): void {
+  const app = appInstanceMap.get(appName)
+  if (app?.sandBox) {
+    const proxyWindow = app.sandBox.proxyWindow
+    const microAppWindow = app.sandBox.microAppWindow
+    let isHashChange = false
+    // for hashChangeEvent
+    const oldHref = proxyWindow.location.href
+    // Do not attach micro state to url when targetFullPath is empty
+    if (targetFullPath) {
+      const oldHash = proxyWindow.location.hash
+      updateMicroLocation(appName, targetFullPath, microAppWindow.location as MicroLocation)
+      isHashChange = proxyWindow.location.hash !== oldHash
+    }
+
+    // dispatch formatted popStateEvent to child
+    dispatchPopStateEventToMicroApp(appName, proxyWindow, microAppWindow)
+
+    // dispatch formatted hashChangeEvent to child when hash change
+    if (isHashChange) dispatchHashChangeEventToMicroApp(appName, proxyWindow, microAppWindow, oldHref)
+
+    // clear element scope before trigger event of next app
+    removeDomScope()
   }
 }
 
@@ -66,17 +134,35 @@ export function addHistoryListener (appName: string): CallableFunction {
 export function dispatchPopStateEventToMicroApp (
   appName: string,
   proxyWindow: WindowProxy,
+  microAppWindow: microAppWindowType,
 ): void {
-  // create PopStateEvent named popstate-appName with sub app state
+  /**
+   * TODO: test
+   * angular14 takes e.type as type judgment
+   * when e.type is popstate-appName popstate event will be invalid
+   * Object.defineProperty(newPopStateEvent, 'type', {
+   *    value: 'popstate',
+   *    writable: true,
+   *    configurable: true,
+   *    enumerable: true,
+   * })
+   */
+  /**
+   * create PopStateEvent named popstate-appName with sub app state
+   * TODO: feeling like there's something wrong, check carefully
+   *  In native mode, getMicroState(appName) return rawWindow.history.state when use microApp.router.push/replace or other scenes when state.__MICRO_APP_STATE__[appName] is null
+   */
   const newPopStateEvent = new PopStateEvent(
-    formatEventName('popstate', appName),
+    'popstate',
     { state: getMicroState(appName) }
   )
 
-  globalEnv.rawWindow.dispatchEvent(newPopStateEvent)
+  microAppWindow.dispatchEvent(newPopStateEvent)
 
-  // call function window.onpopstate if it exists
-  typeof proxyWindow.onpopstate === 'function' && proxyWindow.onpopstate(newPopStateEvent)
+  if (!isIframeSandbox(appName)) {
+    // call function window.onpopstate if it exists
+    isFunction(proxyWindow.onpopstate) && proxyWindow.onpopstate(newPopStateEvent)
+  }
 }
 
 /**
@@ -88,20 +174,23 @@ export function dispatchPopStateEventToMicroApp (
 export function dispatchHashChangeEventToMicroApp (
   appName: string,
   proxyWindow: WindowProxy,
+  microAppWindow: microAppWindowType,
   oldHref: string,
 ): void {
   const newHashChangeEvent = new HashChangeEvent(
-    formatEventName('hashchange', appName),
+    'hashchange',
     {
       newURL: proxyWindow.location.href,
       oldURL: oldHref,
     }
   )
 
-  globalEnv.rawWindow.dispatchEvent(newHashChangeEvent)
+  microAppWindow.dispatchEvent(newHashChangeEvent)
 
-  // call function window.onhashchange if it exists
-  typeof proxyWindow.onhashchange === 'function' && proxyWindow.onhashchange(newHashChangeEvent)
+  if (!isIframeSandbox(appName)) {
+    // call function window.onhashchange if it exists
+    isFunction(proxyWindow.onhashchange) && proxyWindow.onhashchange(newHashChangeEvent)
+  }
 }
 
 /**
@@ -132,14 +221,21 @@ function dispatchNativeHashChangeEvent (oldHref: string): void {
 
 /**
  * dispatch popstate & hashchange event to browser
+ * @param appName app.name
  * @param onlyForBrowser only dispatch event to browser
  * @param oldHref old href of rawWindow.location
  */
-export function dispatchNativeEvent (onlyForBrowser: boolean, oldHref?: string): void {
+export function dispatchNativeEvent (
+  appName: string,
+  onlyForBrowser: boolean,
+  oldHref?: string,
+): void {
   // clear element scope before dispatch global event
   removeDomScope()
-  dispatchNativePopStateEvent(onlyForBrowser)
-  if (oldHref) {
-    dispatchNativeHashChangeEvent(oldHref)
+  if (isEffectiveApp(appName)) {
+    dispatchNativePopStateEvent(onlyForBrowser)
+    if (oldHref) {
+      dispatchNativeHashChangeEvent(oldHref)
+    }
   }
 }

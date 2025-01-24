@@ -15,4 +15,10 @@
   font-weight: bolder;
   margin-bottom: 20px;
   margin-top: 20px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.demo-list {
+  text-align: center;
 }

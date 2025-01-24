@@ -1,9 +1,10 @@
 <template>
   <div>
-    <div class='logo-img'></div>
+    <div id="imageId" class='logo-img'></div>
     <!-- <div class='outer-img'></div>
     <img src="../assets/logo.png" alt=""> -->
     <h3>Vue@{{version}}</h3>
+    <a href="#imageId">测试a标签瞄点</a>
     <HelloWorld msg="Welcome to Your Vue.js App"/>
     <div class='msg-title'>{{microDataStr}}</div>
     <span class="iconfont">&#xe649;</span>
@@ -22,12 +23,29 @@
       </ul>
       <button @click="renderNode">渲染一万个元素</button>
     </div>
+    <router-link to="/page2">page2</router-link>
+
+    <div>{{drag?'拖拽中':'拖拽停止'}}</div>
+    <!--使用draggable组件-->
+    <draggable v-model="myArray"  chosenClass="chosen" forceFallback="true" group="people" animation="1000" @start="onStart" @end="onEnd">
+      <transition-group>
+      <div class="item" v-for="element in myArray" :key="element.id">{{element.name}}</div>
+      </transition-group>
+    </draggable>
+    <button @click="testWindowOpen">测试window.open</button>
+    <!-- <micro-app-vue
+      name='test-react16'
+      url='http://localhost:3001/micro-app/react16/'
+      :data="data"
+      iframe
+    ></micro-app-vue> -->
   </div>
 </template>
 
 <script>
 import HelloWorld from '../components/HelloWorld.vue'
 import Vue from 'vue'
+import draggable from 'vuedraggable'
 
 export default {
   name: 'Page1',
@@ -37,6 +55,15 @@ export default {
       centerDialogVisible: false,
       microDataStr: '',
       liList: 0,
+      drag:false,
+      //定义要被拖拽对象的数组
+      myArray:[
+        {people:'cn',id:1,name:'www.itxst.com'},
+        {people:'cn',id:2,name:'www.baidu.com'},
+        {people:'cn',id:3,name:'www.taobao.com'},
+        {people:'us',id:4,name:'www.google.com'}
+      ],
+      data: {a: 1111}
     }
   },
   created () {
@@ -47,7 +74,8 @@ export default {
     window.microApp && window.microApp.removeDataListener(this.handleDataChange)
   },
   components: {
-    HelloWorld
+    HelloWorld,
+    draggable,
   },
   methods: {
     handleDataChange (data) {
@@ -71,6 +99,17 @@ export default {
     jumpWithLocation () {
       // 通过location跳转page2
       location.href = '/micro-app/vue2/#/page2'
+    },
+    //开始拖拽事件
+    onStart(){
+      this.drag=true;
+    },
+    //拖拽结束事件
+    onEnd() {
+      this.drag=false;
+    },
+    testWindowOpen () {
+      window.open('https://www.jd.com/', '_self')
     }
   }
 }
@@ -97,5 +136,17 @@ export default {
   .test-safari-before::before {
     content: 'ddddd';
     color: red;
+  }
+  /*被拖拽对象的样式*/
+  .item {
+    padding: 6px;
+    background-color: #fdfdfd;
+    border: solid 1px #eee;
+    margin-bottom: 10px;
+    cursor: move;
+  }
+  /*选中样式*/
+  .chosen {
+    border: solid 2px #3089dc !important;
   }
 </style>

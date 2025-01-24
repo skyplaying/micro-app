@@ -13,21 +13,29 @@ import {
   Row,
   Col,
   message,
+  Drawer,
+  Modal,
 } from 'antd';
 import { UploadOutlined, InboxOutlined } from '@ant-design/icons';
 import styled from 'styled-components'
 import './page2.css'
 import bigImg from '../../assets/big-img.jpeg';
+// import { Button as AButton, Message } from '@alifd/next';
 
 // 测试umd二次渲染时全局变量是否丢失
 window.umdGlobalKey = 'umdGlobalKey'
 
-window.addEventListener('click', () => {
-  console.log('测试umd懒加载页面二次渲染全局事件')
-})
+// window.addEventListener('click', () => {
+//   console.log('测试umd懒加载页面二次渲染全局事件 - window.click')
+// })
+
+// document.addEventListener('click', () => {
+//   console.log('测试umd懒加载页面二次渲染全局事件 - document.click')
+// })
 
 window.microApp?.addDataListener((data) => {
   console.log('懒加载的数据监听', data)
+  return { listen: 'from page2.js' }
 })
 
 const StyledButton = styled.button`
@@ -61,14 +69,39 @@ const normFile = (e) => {
 
 const Page2 = () => {
   const [count, changeCount] = useState(0)
+  const [open, setOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const onFinish = (values) => {
     console.log('Received values of form: ', values);
     message.success('This is a success message');
   };
 
   const testClick = () => {
-    console.log(444444444)
+    console.log('click from test button')
+    // window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }))
+    // window.location.href = '/micro-app/react16/page2'
+    // window.history.go(-1)
   }
+
+  const showDrawer = () => {
+    setOpen(true);
+  };
+
+  const onClose = () => {
+    setOpen(false);
+  };
+
+  const showModal = () => {
+    setIsModalOpen(true);
+  };
+
+  const handleOk = () => {
+    setIsModalOpen(false);
+  };
+
+  const handleCancel = () => {
+    setIsModalOpen(false);
+  };
 
   useEffect(() => {
     console.log('react16 page2 useEffect')
@@ -93,10 +126,10 @@ const Page2 = () => {
   return (
     <div>
       <img src={bigImg} alt="" width="100" />
-      <div>{count}</div>
+      <div>接收数据次数：{count}</div>
       <div>
-        <p>styled-component👇</p>
-        <StyledButton>按钮</StyledButton>
+        <StyledButton>测试styled-components的样式</StyledButton >
+        {/* <AButton type="primary" onClick={() => Message.success("success")}>Message</AButton> */}
       </div>
       <div className="test-btn" onClick={testClick}>test</div>
       <Form
@@ -303,6 +336,40 @@ const Page2 = () => {
           </Button>
         </Form.Item>
       </Form>
+      <div className='demo-list'>
+        <div>
+          <br />
+          <br />
+          <h1>抽屉</h1>
+          <Button type="primary" onClick={showDrawer}>
+            Open
+          </Button>
+          <Drawer
+            title="Basic Drawer"
+            placement="right"
+            onClose={onClose}
+            open={open}
+            // getContainer={(target) => console.log(11111, target)}
+          >
+            <p>Some contents...</p>
+            <p>Some contents...</p>
+            <p>Some contents...</p>
+          </Drawer>
+        </div>
+        <div>
+          <br />
+          <br />
+          <h1>对话框</h1>
+          <Button type="primary" onClick={showModal}>
+            Open Modal
+          </Button>
+          <Modal title="Basic Modal" open={isModalOpen} onOk={handleOk} onCancel={handleCancel}>
+            <p>Some contents...</p>
+            <p>Some contents...</p>
+            <p>Some contents...</p>
+          </Modal>
+        </div>
+      </div>
     </div>
   );
 };

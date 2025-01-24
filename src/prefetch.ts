@@ -1,6 +1,20 @@
-import type { prefetchParamList, prefetchParam, globalAssetsType } from '@micro-app/types'
-import type { SourceCenter as SourceCenterType } from './source/source_center'
-import CreateApp, { appInstanceMap } from './create_app'
+import type {
+  prefetchParamList,
+  prefetchParam,
+  globalAssetsType,
+  OnLoadParam,
+} from '@micro-app/types'
+import type {
+  SourceCenter as SourceCenterType,
+} from './source/source_center'
+import microApp from './micro_app'
+import sourceCenter from './source/source_center'
+import {
+  PREFETCH_LEVEL,
+} from './constants'
+import CreateApp, {
+  appInstanceMap,
+} from './create_app'
 import {
   requestIdleCallback,
   formatAppURL,
@@ -13,72 +27,121 @@ import {
   isString,
   isFunction,
   promiseRequestIdle,
+  isNumber,
+  assign,
+  isTargetExtension,
 } from './libs/utils'
-import { fetchSource } from './source/fetch'
-import sourceCenter from './source/source_center'
-import microApp from './micro_app'
+import {
+  fetchSource,
+} from './source/fetch'
+import {
+  initRouterMode,
+} from './sandbox/router'
 
 /**
  * preFetch([
  *  {
  *    name: string,
  *    url: string,
- *    disableScopecss?: boolean,
- *    disableSandbox?: boolean,
- *    disableMemoryRouter?: boolean,
+ *    iframe: boolean,
+ *    inline: boolean,
+ *    'disable-scopecss': boolean,
+ *    'disable-sandbox': boolean,
+ *    level: number,
+ *    'default-page': string,
+ *    'disable-patch-request': boolean,
  *  },
  *  ...
  * ])
  * Note:
- *  1: preFetch is asynchronous and is performed only when the browser is idle
- *  2: disableScopecss, disableSandbox, disableMemoryRouter must be same with micro-app element, if conflict, the one who executes first shall prevail
- * @param apps micro apps
+ *  1: preFetch is async and is performed only when the browser is idle
+ *  2: options of prefetch preferably match the config of the micro-app element, although this is not required
+ * @param apps micro app options
+ * @param delay delay time
  */
-export default function preFetch (apps: prefetchParamList): void {
+export default function preFetch (apps: prefetchParamList, delay?: number): void {
   if (!isBrowser) {
     return logError('preFetch is only supported in browser environment')
   }
-  requestIdleCallback(() => {
-    isFunction(apps) && (apps = apps())
 
-    if (isArray(apps)) {
-      apps.reduce((pre, next) => pre.then(() => preFetchInSerial(next)), Promise.resolve())
-    }
+  requestIdleCallback(() => {
+    const delayTime = isNumber(delay) ? delay : microApp.options.prefetchDelay
+
+    /**
+     * TODO: remove setTimeout
+     * 如果要保留setTimeout，则需要考虑清空定时器的情况
+     */
+    setTimeout(() => {
+      // releasePrefetchEffect()
+      preFetchInSerial(apps)
+    }, isNumber(delayTime) ? delayTime : 3000)
   })
+
+  // const handleOnLoad = (): void => {
+  //   releasePrefetchEffect()
+  //   requestIdleCallback(() => {
+  //     preFetchInSerial(apps)
+  //   })
+  // }
+
+  // const releasePrefetchEffect = (): void => {
+  //   window.removeEventListener('load', handleOnLoad)
+  //   clearTimeout(preFetchTime)
+  // }
+
+  // window.addEventListener('load', handleOnLoad)
+}
+
+function preFetchInSerial (apps: prefetchParamList): void {
+  isFunction(apps) && (apps = apps())
+
+  if (isArray(apps)) {
+    apps.reduce((pre, next) => pre.then(() => preFetchAction(next)), Promise.resolve())
+  }
 }
 
 // sequential preload app
-function preFetchInSerial (prefetchApp: prefetchParam): Promise<void> {
+function preFetchAction (options: prefetchParam): Promise<void> {
   return promiseRequestIdle((resolve: PromiseConstructor['resolve']) => {
-    if (isPlainObject(prefetchApp) && navigator.onLine) {
-      prefetchApp.name = formatAppName(prefetchApp.name)
-      prefetchApp.url = formatAppURL(prefetchApp.url, prefetchApp.name)
-      if (prefetchApp.name && prefetchApp.url && !appInstanceMap.has(prefetchApp.name)) {
-        /**
-         * TODO:
-         * 1、预加载与micro-app元素不再绑定，各自定义参数
-         * 2、如果预加载关闭样式隔离，micro-app元素没有关闭，则需要在mount时再次处理 -- 废弃
-         *    只有在元素上明确打开样式隔离，才会进行处理
-         * 3、预加载增加shadowDOM参数，当开启时关闭样式隔离
-         *   但是有一个问题，如果用户在预加载设置了shadowDOM，但是在元素上没设置，他可能认为预加载设置后就不需要在元素上设置了，这样会导致出问题
-         *   上面也一样，用户在预加载关闭样式隔离后，渲染时如果元素上没有明确关闭，那么还是会生效的
-         *   这样吧，还是可以同时存在，但是预加载的优先级小于元素，当在预加载开启了样式隔离或者shadowDOM，如果子应用没有明确关闭这两个设置，那么默认按照预加载的执行
-         *
-         * 4、增加配置 inline esmodule
-         *
-         * 文档提示：
-         *  1、预加载的配置建议和<micro-app>元素上的配置保持一致，且后者拥有更高的优先级，当两者产生冲突时，以<micro-app>元素上的配置为准
-         */
+    if (isPlainObject(options) && navigator.onLine) {
+      options.name = formatAppName(options.name)
+      options.url = formatAppURL(options.url, options.name)
+      if (options.name && options.url && !appInstanceMap.has(options.name)) {
         const app = new CreateApp({
-          name: prefetchApp.name,
-          url: prefetchApp.url,
-          scopecss: !(prefetchApp['disable-scopecss'] ?? prefetchApp.disableScopecss ?? microApp['disable-scopecss']),
-          useSandbox: !(prefetchApp['disable-sandbox'] ?? prefetchApp.disableSandbox ?? microApp['disable-sandbox']),
-          useMemoryRouter: !(prefetchApp['disable-memory-router'] ?? microApp['disable-memory-router']),
+          name: options.name,
+          url: options.url,
           isPrefetch: true,
+          scopecss: !(options['disable-scopecss'] ?? options.disableScopecss ?? microApp.options['disable-scopecss']),
+          useSandbox: !(options['disable-sandbox'] ?? options.disableSandbox ?? microApp.options['disable-sandbox']),
+          inline: options.inline ?? microApp.options.inline,
+          iframe: options.iframe ?? microApp.options.iframe,
+          prefetchLevel: options.level && PREFETCH_LEVEL.includes(options.level) ? options.level : microApp.options.prefetchLevel && PREFETCH_LEVEL.includes(microApp.options.prefetchLevel) ? microApp.options.prefetchLevel : 2,
         })
 
-        app.prefetchResolve = resolve
+        const oldOnload = app.onLoad
+        const oldOnLoadError = app.onLoadError
+        app.onLoad = (onLoadParam: OnLoadParam): void => {
+          if (app.isPrerender) {
+            assign(onLoadParam, {
+              defaultPage: options['default-page'],
+              /**
+               * TODO: 预渲染支持disable-memory-router，默认渲染首页即可，文档中也要保留
+               * 问题：
+               *  1、如何确保子应用进行跳转时不影响到浏览器地址？？pure？？
+               */
+              routerMode: initRouterMode(options['router-mode']),
+              baseroute: options.baseroute,
+              disablePatchRequest: options['disable-patch-request'],
+            })
+          }
+          resolve()
+          oldOnload.call(app, onLoadParam)
+        }
+
+        app.onLoadError = (...rests): void => {
+          resolve()
+          oldOnLoadError.call(app, ...rests)
+        }
       } else {
         resolve()
       }
@@ -102,9 +165,9 @@ export function getGlobalAssets (assets: globalAssetsType): void {
 }
 
 // TODO: requestIdleCallback for every file
-function fetchGlobalResources (resources: string[] | undefined, suffix: string, sourceHandler: SourceCenterType['link'] | SourceCenterType['script']) {
+function fetchGlobalResources (resources: string[] | void, suffix: string, sourceHandler: SourceCenterType['link'] | SourceCenterType['script']) {
   if (isArray(resources)) {
-    const effectiveResource = resources!.filter((path) => isString(path) && path.includes(`.${suffix}`) && !sourceHandler.hasInfo(path))
+    const effectiveResource = resources!.filter((path) => isString(path) && isTargetExtension(path, suffix) && !sourceHandler.hasInfo(path))
 
     const fetchResourcePromise = effectiveResource.map((path) => fetchSource(path))
 

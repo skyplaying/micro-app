@@ -1,9 +1,12 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { Modal, Button, Space } from 'antd';
 import styled from 'styled-components'
 import SVG from 'react-inlinesvg';
 import logo from '../../assets/logo.svg';
 import './page1.css';
+// import { loadModules, loadCss } from "esri-loader";
+// loadCss();
+// import LeaderLine from './leader-line.js'
 
 const StyledButton = styled.button`
   background: transparent;
@@ -53,6 +56,50 @@ function controlBase () {
 }
 
 function Page1() {
+  function dispatchData () {
+    // window.microApp?.dispatch({'from': `来自子应用${window.__MICRO_APP_NAME__}的数据` + (+new Date())})
+    window.microApp?.dispatch({ childKey: '子应用发送的第二个数据' }, (res) => {
+      console.log('向基座发送数据完成', res)
+
+      // 循环嵌套
+      // window.microApp?.dispatch({ childKey4: '子应用发送的第4个数据' }, () => {
+      //   console.log('循环嵌套发送数据完成')
+      // })
+    })
+    // 强制发送数据
+    window.microApp?.forceDispatch({ childKey3: '子应用发送的第三个数据' }, (res) => {
+      console.log('强制向基座发送数据完成', res)
+    })
+  }
+
+
+  useEffect(() => {
+    // setInterval(() => {
+    //   console.log(`子应用${window.__MICRO_APP_NAME__}的setInterval`)
+    // }, 5000)
+  //   loadModules(["esri/Map", "esri/views/MapView"])
+  //   .then(([Map, MapView]) => {
+  //     const map = new Map({
+  //       basemap: "topo-vector",
+  //     });
+  //     console.log(222222, document.getElementById('view-div'))
+  //     const view = new MapView({
+  //       container: document.getElementById('view-div'),
+  //       map: map,
+  //       center: [118.24, 34.01],
+  //       zoom: 12,
+  //     });
+  //   })
+  //   .catch((err) => {
+  //     console.error(err);
+  //   });
+
+  // new LeaderLine(
+  //   document.getElementById('start'),
+  //   document.getElementById('end')
+  // );
+
+  }, [])
   return (
     <div className="App">
       <header className="App-header">
@@ -71,7 +118,7 @@ function Page1() {
       </header>
       <div className='btn-con2' clstag="pageclick|keycount|home2013|08a">
         <Space direction='vertical'>
-          <Button type="primary" onClick={() => window.microApp?.dispatch({'from': '来自微应用react16的数据' + (+new Date())})}>
+          <Button type="primary" onClick={dispatchData}>
             向基座应用发送数据
           </Button>
           <Button type="primary" onClick={getDataFromBase}>
@@ -94,6 +141,9 @@ function Page1() {
       <div>
         <a href={`${process.env.NODE_ENV === 'production' ? window.location.origin : 'http://localhost:3001'}/micro-app/react16/static/media/logo.6ce24c58.svg`} download="w3logo" onClick={download}>下载</a>
       </div>
+      {/* <div id='view-div'></div> */}
+      {/* <div id="start">start</div>
+      <div id="end">end</div> */}
     </div>
   );
 }

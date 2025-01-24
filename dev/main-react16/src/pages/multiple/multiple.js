@@ -15,6 +15,19 @@ function Vue3 () {
   const [reactChildName, changename] = useState('react162')
   const [showLoading, hideLoading] = useState(true)
 
+  function dispatchGlobalData () {
+    microApp.setData(reactChildName, {time: new Date()}, () => {
+      console.log(`发送给子应用${reactChildName}成功`)
+      // microApp.setData('vue22', {name: '循环发送'}, () => {
+      //   console.log(`循环发送成功`)
+      // })
+    })
+
+    microApp.setData('vue22', {time: new Date()}, () => {
+      console.log(`发送给子应用vue22成功`)
+    })
+  }
+
   useEffect(() => {
     console.time('react16')
   }, [])
@@ -54,13 +67,20 @@ function Vue3 () {
         >
           发送数据
         </Button>
+        <Button
+          type='primary'
+          onClick={dispatchGlobalData}
+          style={{width: '120px'}}
+        >
+          手动发送数据
+        </Button>
         <Button type="primary" onClick={() => changename('react163')}>改变react16的name</Button>
-        <Button type="primary" onClick={jumpToReactHome}>基座控制React子应用跳转home</Button>
-        <Button type="primary" onClick={jumpToReactPage2}>基座控制React子应用跳转page2</Button>
-        <Button type="primary" onClick={jumpToReactInline}>基座控制React子应用跳转inline</Button>
-        <Button type="primary" onClick={jumpToVueHome}>基座控制Vue子应用跳转home</Button>
-        <Button type="primary" onClick={jumpToVuePage2}>基座控制Vue子应用跳转page2</Button>
-        <Button type="primary" onClick={jumpToVueTable}>基座控制Vue子应用跳转table</Button>
+        <Button type="primary" onClick={jumpToReactHome}>控制React子应用跳转home</Button>
+        <Button type="primary" onClick={jumpToReactPage2}>控制React子应用跳转page2</Button>
+        <Button type="primary" onClick={jumpToReactInline}>控制React子应用跳转inline</Button>
+        <Button type="primary" onClick={jumpToVueHome}>控制Vue子应用跳转home</Button>
+        <Button type="primary" onClick={jumpToVuePage2}>控制Vue子应用跳转page2</Button>
+        <Button type="primary" onClick={jumpToVueTable}>控制Vue子应用跳转table</Button>
       </Col>
       </div>
       {
@@ -86,6 +106,7 @@ function Vue3 () {
           // destroy
           // inline
           // scopecss='false'
+          iframe
         >
         </micro-app>
       </div>

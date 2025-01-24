@@ -3,7 +3,7 @@
 import jsxCustomEvent from '@micro-zoe/micro-app/polyfill/jsx-custom-event'
 import 'zone.js'
 import { useState } from 'react'
-import { Spin, Button } from 'antd'
+import { Spin, Button, Col } from 'antd'
 import { LoadingOutlined } from '@ant-design/icons'
 import config from '../../config'
 import microApp from '@micro-zoe/micro-app'
@@ -20,7 +20,9 @@ function Angular11 () {
 
   return (
     <div>
-      <Button type="primary" onClick={jumpToPage2ByBase}>基座控制子应用跳转</Button>
+      <Col span={6} className='btn-con'>
+        <Button type="primary" onClick={jumpToPage2ByBase}>控制子应用跳转page2</Button>
+      </Col>
       {
         showLoading && <Spin indicator={antIcon} />
       }
@@ -29,11 +31,13 @@ function Angular11 () {
         url={`${config.angular11}micro-app/angular11`}
         data={data}
         onMounted={() => hideLoading(false)}
-        // baseRoute='/micro-app/demo/angular11'
+        baseRoute='/micro-app/demo/angular11'
         // destroy
-        // inline
+        inline
         // disableScopecss
         // keep-alive
+        iframe
+        // disable-memory-router
       >
       </micro-app>
     </div>

@@ -7,49 +7,108 @@ declare module '@micro-app/types' {
 
   type microAppWindowType = Window & any
 
-  type appName = string
+  type AppName = string
 
   type SourceAddress = string
 
   type AttrsType = Map<string, string>
 
-  type fiberTasks = Array<() => Promise<void>> | null
-
-  interface SandBoxInterface {
-    proxyWindow: WindowProxy
-    microAppWindow: Window // Proxy target
-    start (
-      umdMode: boolean,
-      baseRoute: string,
-      useMemoryRouter: boolean,
-      defaultPage: string,
-      disablePatchRequest: boolean,
-    ): void
-    stop (
-      umdMode: boolean,
-      keepRouteState: boolean,
-      clearEventSource: boolean,
-    ): void
-    // record umd snapshot before the first execution of umdHookMount
-    recordUmdSnapshot (): void
-    // rebuild umd snapshot before remount umd app
-    rebuildUmdSnapshot (): void
-    setRouteInfoForKeepAliveApp (): void
-    removeRouteInfoForKeepAliveApp (): void
+  type RequestIdleCallbackOptions = {
+    timeout: number
   }
 
-  interface SandBoxAdapter {
-    // Variables that can only assigned to rawWindow
-    escapeSetterKeyList: PropertyKey[]
+  type RequestIdleCallbackInfo = {
+    readonly didTimeout: boolean
+    timeRemaining: () => number
+  }
 
+  type fiberTasks = Array<() => Promise<void>> | null
+
+  type MicroEventListener = EventListenerOrEventListenerObject & Record<string, any>
+
+  type timeInfo = {
+    handler: TimerHandler,
+    timeout?: number,
+    args: any[],
+  }
+
+  interface MicroAppElementTagNameMap extends HTMLElementTagNameMap {
+    'micro-app': any,
+  }
+
+  interface CommonEffectHook {
+    reset(): void
+    record(): void
+    rebuild(): void
+    release(clearTimer?: boolean): void
+  }
+
+  interface SandBoxStartParams {
+    umdMode: boolean
+    baseroute: string
+    defaultPage: string
+    disablePatchRequest: boolean
+  }
+
+  interface SandBoxStopParams {
+    umdMode: boolean
+    keepRouteState: boolean
+    destroy: boolean
+    clearData: boolean
+  }
+
+  interface releaseGlobalEffectParams {
+    umdMode?: boolean,
+    clearData?: boolean,
+    isPrerender?: boolean,
+    keepAlive?: boolean,
+    destroy?: boolean,
+  }
+
+  interface BaseSandboxType {
+    // Properties that can only get and set in microAppWindow, will not escape to rawWindow
+    scopeProperties: PropertyKey[]
+    // Properties that can be escape to rawWindow
+    escapeProperties: PropertyKey[]
+    // Properties newly added to microAppWindow
+    injectedKeys: Set<PropertyKey>
+    // Properties escape to rawWindow, cleared when unmount
+    escapeKeys: Set<PropertyKey>
+    // Sandbox ready state
+    sandboxReady: Promise<void>
+    // Variables that can only assigned to rawWindow
+    rawWindowScopeKeyList: PropertyKey[]
     // Variables that can escape to rawWindow
     staticEscapeProperties: PropertyKey[]
-
     // Variables that scoped in child app
     staticScopeProperties: PropertyKey[]
+    // clear mount, unmount when stop in default mode
+    clearHijackUmdHooks: () => void
+  }
 
-    // adapter for react
-    // injectReactHRMProperty (): void
+  interface WithSandBoxInterface extends BaseSandboxType {
+    // proxy(microWindow)
+    proxyWindow: WindowProxy
+    // child window
+    microAppWindow: Window // Proxy target
+    start (startParams: SandBoxStartParams): void
+    stop (stopParams: SandBoxStopParams): void
+    recordAndReleaseEffect (options: releaseGlobalEffectParams, preventRecord?: boolean): void
+    // reset effect snapshot data
+    resetEffectSnapshot(): void
+    // record umd snapshot before the first execution of umdHookMount
+    recordEffectSnapshot (): void
+    // rebuild umd snapshot before remount umd app
+    rebuildEffectSnapshot (): void
+    releaseGlobalEffect (options: releaseGlobalEffectParams): void
+    setRouteInfoForKeepAliveApp (): void
+    removeRouteInfoForKeepAliveApp (): void
+    setPreRenderState (state: boolean): void
+    markUmdMode(state: boolean): void
+    patchStaticElement (container: Element | ShadowRoot): void
+    actionsBeforeExecScripts (container: Element | ShadowRoot, handleUmdHooks: Func): void
+    deleteIframeElement? (): void
+    setStaticAppState (state: string): void
   }
 
   type LinkSourceInfo = {
@@ -57,25 +116,24 @@ declare module '@micro-app/types' {
     appSpace: Record<string, {
       attrs: Map<string, string>, // active element.attributes
       placeholder?: Comment | null, // placeholder comment
-    }>,
-    parseResult?: {
-      prefix: string, // micro-app[name=appName]
-      parsedCode: string, // parsed code
-    },
+      parsedCode?: string, // parsed code
+      prefix?: string, // micro-app[name=appName]
+    }>
   }
 
   type ScriptSourceInfo = {
     code: string, // source code
     isExternal: boolean, // external script
     appSpace: Record<string, {
-      isDynamic: boolean, // dynamic create script
       async: boolean, // async script
       defer: boolean, // defer script
       module: boolean, // module type script
       inline: boolean, // run js with inline script
+      pure: boolean, // pure script
       attrs: Map<string, string>, // element attributes
       parsedCode?: string, // bind code
       parsedFunction?: Function | null, // code to function
+      sandboxType?: 'with' | 'iframe' | 'disable' // sandbox type (with, iframe, disable)
     }>
   }
 
@@ -85,86 +143,103 @@ declare module '@micro-app/types' {
     scripts: Set<string>, // script address list
   }
 
+  interface MountParam {
+    container: HTMLElement | ShadowRoot // app container
+    inline: boolean // run js in inline mode
+    routerMode: string // virtual router mode
+    defaultPage: string // default page of virtual router
+    baseroute: string // route prefix, default is ''
+    disablePatchRequest: boolean // prevent rewrite request method of child app
+    fiber: boolean // run js in fiber mode
+    // hiddenRouter: boolean
+  }
+
+  interface OnLoadParam {
+    html: HTMLElement,
+    // below params is only for prerender app
+    defaultPage?: string // default page of virtual router
+    routerMode?: string // virtual router mode
+    baseroute?: string // route prefix, default is ''
+    disablePatchRequest?: boolean // prevent rewrite request method of child app
+  }
+
+  interface UnmountParam {
+    destroy: boolean, // completely destroy, delete cache resources
+    clearData: boolean // clear data of dateCenter
+    keepRouteState: boolean // keep route state when unmount, default is false
+    unmountcb?: CallableFunction // callback of unmount
+  }
+
   // app instance
-  interface AppInterface {
-    isPrefetch: boolean // whether prefetch app, default is false
-    prefetchResolve: (() => void) | null // prefetch callback
+  interface AppInterface extends Pick<Element, 'querySelector' | 'querySelectorAll'> {
+    source: sourceType // source list
+    // TODO: 去掉any
+    sandBox: WithSandBoxInterface | null | any // sandbox
     name: string // app name
     url: string // app url
-    ssrUrl: string // html path in ssr mode
-    container: HTMLElement | ShadowRoot | null // container maybe null, micro-app, shadowRoot, DIV(keep-alive)
-    inline: boolean //  whether js runs in inline script mode, default is false
     scopecss: boolean // whether use css scoped, default is true
     useSandbox: boolean // whether use js sandbox, default is true
-    useMemoryRouter: boolean // whether use memoryRouter, default is true
-    baseroute: string // route prefix, default is ''
-    keepRouteState: boolean // keep route state when unmount, default is false
-    hiddenRouter: boolean // hide router info of child from browser url
-    sandBox: SandBoxInterface | null // sandbox
+    inline: boolean //  whether js runs in inline script mode, default is false
+    iframe: boolean // use iframe sandbox
+    ssrUrl: string // html path in ssr mode
+    container: HTMLElement | ShadowRoot | null // container maybe null, micro-app, shadowRoot, div(keep-alive)
     umdMode: boolean // is umd mode
-    defaultPage: string // default page when mount
-    source: sourceType // source list
     fiber: boolean // fiber mode
-    esmodule: boolean
+    routerMode: string // virtual router mode
+    isPrefetch: boolean // whether prefetch app, default is false
+    isPrerender: boolean
+    isReloading?: boolean
+    prefetchLevel?: number
+    // defaultPage: string // default page when mount
+    // baseroute: string // route prefix, default is ''
+    // hiddenRouter: boolean // hide router info of child from browser url
 
     // Load resources
     loadSourceCode (): void
 
     // resource is loaded
-    onLoad (html: HTMLElement): void
+    onLoad (onLoadParam: OnLoadParam): void
 
     // Error loading HTML
     onLoadError (e: Error): void
 
     // mount app
-    mount (
-      container?: HTMLElement | ShadowRoot,
-      inline?: boolean,
-      baseroute?: string,
-      keepRouteState?: boolean,
-      defaultPage?: string,
-      hiddenRouter?: boolean,
-      disablePatchRequest?: boolean,
-      fiber?: boolean,
-      esmodule?: boolean
-    ): void
+    mount (mountParams: MountParam): void
 
     // unmount app
-    unmount (destroy: boolean, unmountcb?: CallableFunction): void
+    unmount (unmountParam: UnmountParam): void
 
     // app rendering error
     onerror (e: Error): void
 
+    // set app state
+    setAppState (state: string): void
+
     // get app state
     getAppState (): string
 
+    // get keep-alive state
     getKeepAliveState(): string | null
+
+    parseHtmlString(htmlString: string): HTMLElement
+
+    // is app unmounted
+    isUnmounted (): boolean
+
+    // is app already hidden
+    isHidden (): boolean
 
     // actions for completely destroy
     actionsForCompletelyDestroy (): void
 
     // hidden app when disconnectedCallback with keep-alive
-    hiddenKeepAliveApp (): void
+    hiddenKeepAliveApp (callback?: CallableFunction): void
 
     // show app when connectedCallback with keep-alive
     showKeepAliveApp (container: HTMLElement | ShadowRoot): void
   }
 
-  interface MicroAppElementType {
-    appName: AttrType // app name
-    appUrl: AttrType // app url
-
-    // Hooks for element append to documents
-    connectedCallback (): void
-
-    // Hooks for element delete from documents
-    disconnectedCallback (): void
-
-    // Hooks for element attributes change
-    attributeChangedCallback (a: 'name' | 'url', o: string, n: string): void
-  }
-
-  type prefetchParam = {
+  interface prefetchParam {
     name: string,
     url: string,
     // old config 👇
@@ -173,7 +248,15 @@ declare module '@micro-app/types' {
     // old config 👆
     'disable-scopecss'?: boolean
     'disable-sandbox'?: boolean
-    'disable-memory-router'?: boolean
+    inline?: boolean
+    iframe?: boolean
+    level?: number
+    // prerender only 👇
+    'default-page'?: string
+    'disable-patch-request'?: boolean
+    'router-mode'?: string
+    baseroute?: string
+    // prerender only 👆
   }
 
   // prefetch params
@@ -181,11 +264,14 @@ declare module '@micro-app/types' {
 
   // lifeCycles
   interface lifeCyclesType {
-    created?(e?: CustomEvent): void
-    beforemount?(e?: CustomEvent): void
-    mounted?(e?: CustomEvent): void
-    unmount?(e?: CustomEvent): void
-    error?(e?: CustomEvent): void
+    created?(e: CustomEvent, appName: string): void
+    beforemount?(e: CustomEvent, appName: string): void
+    mounted?(e: CustomEvent, appName: string): void
+    unmount?(e: CustomEvent, appName: string): void
+    error?(e: CustomEvent, appName: string): void
+    beforeshow?(e: CustomEvent, appName: string): void
+    aftershow?(e: CustomEvent, appName: string): void
+    afterhidden?(e: CustomEvent, appName: string): void
   }
 
   type AssetsChecker = (url: string) => boolean;
@@ -226,8 +312,14 @@ declare module '@micro-app/types' {
         loader?: (code: string, url: string) => string
         // html processor
         processHtml?: (code: string, url: string) => string
+        aHrefResolver?: (hrefValue: string, appName: string, appUrl: string) => string
       }>
     }
+  }
+
+  type GetActiveAppsParam = {
+    excludeHiddenApp?: boolean,
+    excludePreRender?: boolean,
   }
 
   type fetchType = (url: string, options: Record<string, unknown>, appName: string | null) => Promise<string>
@@ -237,11 +329,11 @@ declare module '@micro-app/types' {
     css?: string[],
   }
 
-  type OptionsType = {
-    tagName?: string
-    'shadowDOM'?: boolean
-    'destroy'?: boolean
-    'inline'?: boolean
+  interface MicroAppConfig {
+    shadowDOM?: boolean
+    destroy?: boolean
+    destory?: boolean
+    inline?: boolean
     // old config 👇
     disableScopecss?: boolean
     disableSandbox?: boolean
@@ -251,51 +343,82 @@ declare module '@micro-app/types' {
     'disable-memory-router'?: boolean
     'disable-patch-request'?: boolean
     'keep-router-state'?: boolean
-    'hidden-router'?: boolean
-    esmodule?: boolean
+    'keep-alive'?: boolean
+    'clear-data'?: boolean
+    'router-mode'?: string
+    'router-event-delay'?: number | ((appName: string) => number),
+    iframe?: boolean
     ssr?: boolean
     fiber?: boolean
+    prefetchLevel?: number
+    prefetchDelay?: number
+    iframeSrc?: string
+  }
+
+  interface OptionsType extends MicroAppConfig {
+    tagName?: string
     lifeCycles?: lifeCyclesType
     preFetchApps?: prefetchParamList
     plugins?: plugins
     fetch?: fetchType
     globalAssets?: globalAssetsType,
+    excludeAssetFilter?: (assetUrl: string) => boolean
+    /* image video audio 是否设置 crossOrigin = 'anonymous' */
+    includeCrossOrigin?: (assetUrl: string) => boolean
+    getRootElementParentNode?: (node: Node, appName: AppName) => void
+    customProxyDocumentProps?: Map<string | number | symbol, (value: unknown) => void>
   }
 
   // MicroApp config
-  interface MicroAppConfigType {
+  interface MicroAppBaseType {
     tagName: string
-    shadowDOM?: boolean
-    destroy?: boolean
-    inline?: boolean
-    disableScopecss?: boolean
-    disableSandbox?: boolean
-    disableMemoryRouter?: boolean
-    ssr?: boolean
-    lifeCycles?: lifeCyclesType
-    plugins?: plugins
-    fetch?: fetchType
+    hasInit: boolean
+    options: OptionsType
     preFetch(apps: prefetchParamList): void
     router: Router // eslint-disable-line
     start(options?: OptionsType): void
   }
 
+  interface MicroAppElementInterface {
+    appName: AttrType // app name
+    appUrl: AttrType // app url
+    // Hooks for element append to documents
+    connectedCallback (): void
+    // Hooks for element delete from documents
+    disconnectedCallback (): void
+    // Hooks for element attributes change
+    attributeChangedCallback (a: 'name' | 'url', o: string, n: string): void
+    // public mount action for micro_app_element & create_app
+    mount (app: AppInterface): void
+    // unmount app
+    unmount (destroy?: boolean, unmountcb?: CallableFunction): void
+    // Re render app from the command line
+    reload (destroy?: boolean): Promise<boolean>
+    // get delay time of router event
+    getRouterEventDelay (): number
+    // rewrite micro-app.setAttribute, process attr data
+    setAttribute (key: string, value: any): void
+  }
+
   // special CallableFunction for interact
   type CallableFunctionForInteract = CallableFunction & { __APP_NAME__?: string, __AUTO_TRIGGER__?: boolean }
 
-  interface ShadowLocation {
-    [k: string]: string
-  }
+  type PopStateListener = (this: Window, e: PopStateEvent) => void
+  type MicroPopStateEvent = PopStateEvent & { onlyForBrowser?: boolean }
 
   interface MicroLocation extends Location, URL {
-    // shadowLocation is the current location information (href, pathname, search, hash)
-    shadowLocation: ShadowLocation
     fullPath: string
+    self: URL | Location
     [key: string]: any
   }
 
   type MicroHistory = ProxyHandler<History>
   type MicroState = any
+  interface MicroRouterInfoState {
+    fullPath: string | null,
+    state: MicroState,
+    mode: string,
+  }
   type HistoryProxyValue =
     Pick<
     History,
@@ -334,19 +457,24 @@ declare module '@micro-app/types' {
     replace?: boolean
   }
 
-  type navigationMethod = (to: RouterTarget) => void
+  type navigationMethod = (to: RouterTarget) => Promise<void>
 
   interface AccurateGuard {
     [appName: string]: (to: GuardLocation, from: GuardLocation) => void
   }
 
-  type GlobalNormalGuard = ((appName: string, to: GuardLocation, from: GuardLocation) => void)
+  type GlobalNormalGuard = ((to: GuardLocation, from: GuardLocation, appName: string) => void)
 
   type RouterGuard = AccurateGuard | GlobalNormalGuard
 
   type SetDefaultPageOptions = {
     name: string,
     path: string,
+  }
+
+  type AttachAllToURLParam = {
+    includeHiddenApp?: boolean,
+    includePreRender?: boolean,
   }
 
   // Router API for developer
@@ -413,7 +541,7 @@ declare module '@micro-app/types' {
     /**
      * Get defaultPage that set by setDefaultPage
      */
-    getDefaultPage(key: PropertyKey): string | undefined
+    getDefaultPage(key: PropertyKey): string | void
     /**
      * Attach specified active app router info to browser url
      */
@@ -421,7 +549,7 @@ declare module '@micro-app/types' {
     /**
      * Attach all active app router info to browser url
      */
-    attachAllToURL(): void
+    attachAllToURL(options: AttachAllToURLParam): void
     /**
      * Record base app router, let child app control base app navigation
      * It is global data
@@ -438,12 +566,6 @@ declare module '@micro-app/types' {
   type HandleMicroPathResult = {
     fullPath: string,
     isAttach2Hash: boolean,
-  }
-}
-
-declare namespace JSX {
-  interface IntrinsicElements {
-    'micro-app': any
   }
 }
 

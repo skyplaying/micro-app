@@ -2,25 +2,25 @@ import type { AppInterface, fiberTasks } from '@micro-app/types'
 import {
   logError,
   CompletionPath,
-  pureCreateElement,
-  promiseRequestIdle,
+  injectFiberTask,
   serialExecFiberTasks,
+  isLinkElement,
+  isScriptElement,
+  isStyleElement,
+  isImageElement,
 } from '../libs/utils'
-import { extractLinkFromHtml, fetchLinksFromHtml } from './links'
-import { extractScriptElement, fetchScriptsFromHtml, checkExcludeUrl, checkIgnoreUrl } from './scripts'
+import {
+  extractLinkFromHtml,
+  fetchLinksFromHtml,
+} from './links'
+import {
+  extractScriptElement,
+  fetchScriptsFromHtml,
+  checkExcludeUrl,
+  checkIgnoreUrl,
+} from './scripts'
 import scopedCSS from '../sandbox/scoped_css'
-
-/**
- * transform html string to dom
- * @param str string dom
- */
-function getWrapElement (str: string): HTMLElement {
-  const wrapDiv = pureCreateElement('div')
-
-  wrapDiv.innerHTML = str
-
-  return wrapDiv
-}
+import globalEnv from '../libs/global_env'
 
 /**
  * Recursively process each child element
@@ -41,34 +41,36 @@ function flatChildren (
   })
 
   for (const dom of children) {
-    if (dom instanceof HTMLLinkElement) {
+    if (isLinkElement(dom)) {
       if (dom.hasAttribute('exclude') || checkExcludeUrl(dom.getAttribute('href'), app.name)) {
         parent.replaceChild(document.createComment('link element with exclude attribute ignored by micro-app'), dom)
       } else if (!(dom.hasAttribute('ignore') || checkIgnoreUrl(dom.getAttribute('href'), app.name))) {
         extractLinkFromHtml(dom, parent, app)
       } else if (dom.hasAttribute('href')) {
-        dom.setAttribute('href', CompletionPath(dom.getAttribute('href')!, app.url))
+        globalEnv.rawSetAttribute.call(dom, 'href', CompletionPath(dom.getAttribute('href')!, app.url))
       }
-    } else if (dom instanceof HTMLStyleElement) {
+    } else if (isStyleElement(dom)) {
       if (dom.hasAttribute('exclude')) {
         parent.replaceChild(document.createComment('style element with exclude attribute ignored by micro-app'), dom)
       } else if (app.scopecss && !dom.hasAttribute('ignore')) {
-        if (fiberStyleTasks) {
-          fiberStyleTasks.push(() => promiseRequestIdle((resolve: PromiseConstructor['resolve']) => {
-            scopedCSS(dom, app)
-            resolve()
-          }))
-        } else {
-          scopedCSS(dom, app)
-        }
+        injectFiberTask(fiberStyleTasks, () => scopedCSS(dom, app))
       }
-    } else if (dom instanceof HTMLScriptElement) {
+    } else if (isScriptElement(dom)) {
       extractScriptElement(dom, parent, app)
-    } else if (dom instanceof HTMLMetaElement || dom instanceof HTMLTitleElement) {
-      parent.removeChild(dom)
-    } else if (dom instanceof HTMLImageElement && dom.hasAttribute('src')) {
-      dom.setAttribute('src', CompletionPath(dom.getAttribute('src')!, app.url))
+    } else if (isImageElement(dom) && dom.hasAttribute('src')) {
+      globalEnv.rawSetAttribute.call(dom, 'src', CompletionPath(dom.getAttribute('src')!, app.url))
     }
+    /**
+     * Don't remove meta and title, they have some special scenes
+     * e.g.
+     * document.querySelector('meta[name="viewport"]') // for flexible
+     * document.querySelector('meta[name="baseurl"]').baseurl // for api request
+     *
+     * Title point to main app title, child app title used to be compatible with some special scenes
+     */
+    // else if (dom instanceof HTMLMetaElement || dom instanceof HTMLTitleElement) {
+    //   parent.removeChild(dom)
+    // }
   }
 }
 
@@ -78,9 +80,9 @@ function flatChildren (
  * @param app app
  */
 export function extractSourceDom (htmlStr: string, app: AppInterface): void {
-  const wrapElement = getWrapElement(htmlStr)
-  const microAppHead = wrapElement.querySelector('micro-app-head')
-  const microAppBody = wrapElement.querySelector('micro-app-body')
+  const wrapElement = app.parseHtmlString(htmlStr)
+  const microAppHead = globalEnv.rawElementQuerySelector.call(wrapElement, 'micro-app-head')
+  const microAppBody = globalEnv.rawElementQuerySelector.call(wrapElement, 'micro-app-body')
 
   if (!microAppHead || !microAppBody) {
     const msg = `element ${microAppHead ? 'body' : 'head'} is missing`
@@ -93,21 +95,21 @@ export function extractSourceDom (htmlStr: string, app: AppInterface): void {
   flatChildren(wrapElement, app, microAppHead, fiberStyleTasks)
 
   /**
-   * Style and link are parallel, because it takes a lot of time for link to request resources. During this period, style processing can be performed to improve efficiency.
+   * Style and link are parallel, as it takes a lot of time for link to request resources. During this period, style processing can be performed to improve efficiency.
    */
   const fiberStyleResult = serialExecFiberTasks(fiberStyleTasks)
 
   if (app.source.links.size) {
     fetchLinksFromHtml(wrapElement, app, microAppHead, fiberStyleResult)
   } else if (fiberStyleResult) {
-    fiberStyleResult.then(() => app.onLoad(wrapElement))
+    fiberStyleResult.then(() => app.onLoad({ html: wrapElement }))
   } else {
-    app.onLoad(wrapElement)
+    app.onLoad({ html: wrapElement })
   }
 
   if (app.source.scripts.size) {
     fetchScriptsFromHtml(wrapElement, app)
   } else {
-    app.onLoad(wrapElement)
+    app.onLoad({ html: wrapElement })
   }
 }

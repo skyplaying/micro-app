@@ -14,6 +14,7 @@
         :data='data'
         :name='name'
         :url='url'
+        router-mode="state"
         @created='created'
         @beforemount='beforemount'
         @mounted='mounted'
@@ -22,8 +23,9 @@
         @datachange='handleDataChange'
         inline
         baseRoute='/react16'
+        iframe
       >
-      <!-- destroy  inline -->
+      <!-- destroy inline iframe -->
       </micro-app>
     </div>
   </div>

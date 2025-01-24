@@ -2,14 +2,73 @@ import 'babel-polyfill'
 import microApp, { unmountApp, unmountAllApps } from '@micro-zoe/micro-app'
 import config from './config'
 
-// microApp.preFetch([
-//   {name: 'vite', url: `${config.vite}micro-app/vite`},
-//   {name: 'vue2', url: `${config.vue2}micro-app/vue2`},
-//   {name: 'react16', url: `${config.react16}micro-app/react16`},
-//   {name: 'react17', url: `${config.react17}micro-app/react17`},
-//   {name: 'vue3', url: `${config.vue3}micro-app/vue3`},
-//   {name: 'angular11', url: `${config.angular11}micro-app/angular11`},
-// ])
+const prefetchConfig = [
+  // {
+  //   name: 'vite2',
+  //   url: `${config.vite2}micro-app/vite2`,
+  //   level: 3,
+  //   // inline: true,
+  //   // 'disable-sandbox': true,
+  //   'default-page': '/micro-app/vite2/element-plus',
+  //   iframe: true,
+  // },
+  // {
+  //   name: 'vite4',
+  //   url: `${config.vite4}micro-app/vite4/`,
+  //   level: 3,
+  //   // inline: true,
+  //   // 'default-page': '/micro-app/vite2/element-plus',
+  //   iframe: true,
+  // },
+  {
+    name: 'vue2',
+    url: `${config.vue2}micro-app/vue2/`,
+    // 'disable-scopecss': true,
+    level: 3,
+    // 'default-page': '/micro-app/vue2/#/page2',
+    // 'disable-patch-request': false,
+    iframe: true,
+  },
+  // {
+  //   name: 'react16',
+  //   url: `${config.react16}micro-app/react16?a=1`,
+  //   level: 3,
+  //   iframe: true,
+  // },
+  // {
+  //   name: 'react17',
+  //   url: `${config.react17}micro-app/react17`,
+  //   // level: 1,
+  // },
+  // {
+  //   name: 'vue3',
+  //   url: `${config.vue3}micro-app/vue3`,
+  //   level: 3,
+  //   iframe: true,
+  // },
+  // {
+  //   name: 'angular11',
+  //   url: `${config.angular11}micro-app/angular11`,
+  //   // level: 1,
+  // },
+  // {
+  //   name: 'angular14',
+  //   url: `${config.angular14}micro-app/angular14`,
+  //   // level: 1,
+  // },
+]
+
+// microApp.preFetch(prefetchConfig)
+
+window['escapeKey1'] = 'escapeKey1 from base app by global plugin'
+window['escapeKey3'] = 'escapeKey3 from base app'
+window['scopeKey-vite-1'] = 'scopeKey-vite-1 from base app'
+window['escapeKey-vite-1'] = 'escapeKey-vite-1 from base app'
+window['escapeKey-vite-func'] = function () {
+  console.log('escapeKey-vite-func', this)
+  return this
+}
+window.Vue = { tip: 'Vue from base' }
 
 microApp.start({
   // shadowDOM: true,
@@ -23,29 +82,47 @@ microApp.start({
   // 'disable-patch-request': true,
   // 'keep-router-state': true,
   // 'hidden-router': true,
+  // 'router-mode': 'state',
   // esmodule: true,
   // ssr: true,
+  // preFetchApps: prefetchConfig,
+  // prefetchLevel: 3,
+  // prefetchDelay: 10000,
+  // iframe: true,
+  // getRootElementParentNode (node, appName) {
+  //   return node.parentElement
+  // },
+  // iframeSrc: 'http://localhost:3000/',
   lifeCycles: {
-    created () {
-      console.log('created 全局监听')
+    created (e, appName) {
+      console.log(`子应用${appName}被创建 -- 全局监听`)
     },
-    beforemount (e) {
-      console.log('beforemount 全局监听', e)
+    beforemount (e, appName) {
+      console.log(`子应用${appName}即将渲染 -- 全局监听`)
     },
-    mounted () {
-      console.log('mounted 全局监听')
+    mounted (e, appName) {
+      console.log(`子应用${appName}已经渲染完成 -- 全局监听`)
     },
-    unmount () {
-      console.log('unmount 全局监听')
+    unmount (e, appName) {
+      console.log(`子应用${appName}已经卸载 -- 全局监听`)
     },
-    error () {
-      console.log('error 全局监听')
-    }
+    error (e, appName) {
+      console.log(`子应用${appName}加载出错 -- 全局监听`)
+    },
+    beforeshow (e, appName) {
+      console.log(`子应用${appName} beforeshow -- 全局监听`)
+    },
+    aftershow (e, appName) {
+      console.log(`子应用${appName} aftershow -- 全局监听`)
+    },
+    afterhidden (e, appName) {
+      console.log(`子应用${appName} afterhidden -- 全局监听`)
+    },
   },
   plugins: {
     global: [
       {
-        scopeProperties: ['scopeKey1', 'scopeKey2'],
+        scopeProperties: ['scopeKeyPure1', 'scopeKey1', 'scopeKey2'],
         escapeProperties: ['escapeKey1', 'escapeKey2'],
         options: {a: 1,},
         loader(code, url, options) {
@@ -56,7 +133,7 @@ microApp.start({
     ],
     modules: {
       react16: [{
-        scopeProperties: ['scopeKey3', 'scopeKey4'],
+        scopeProperties: ['scopeKeyPure2', 'scopeKey3', 'scopeKey4'],
         escapeProperties: ['escapeKey3', 'escapeKey4'],
         // loader(code, url) {
         //   if (process.env.NODE_ENV === 'development' && code.indexOf('sockjs-node') > -1) {
@@ -74,16 +151,13 @@ microApp.start({
           return code
         }
       }],
-      vite: [{
-        loader(code) {
-          if (process.env.NODE_ENV === 'development') {
-            code = code.replace(/(from|import)(\s*['"])(\/micro-app\/vite\/)/g, (all) => {
-              return all.replace('/micro-app/vite/', 'http://localhost:7001/micro-app/vite/')
-            })
-          }
-          return code
-        }
-      }]
+      vite2: [{
+        escapeProperties: ['escapeKey3', 'escapeKey4'],
+      }],
+      vite4: [{
+        scopeProperties: ['scopeKey-vite-1', 'scopeKey-vite-2'],
+        escapeProperties: ['escapeKey-vite-1', 'escapeKey-vite-2', 'escapeKey-vite-func'],
+      }],
     }
   },
   /**
@@ -112,29 +186,89 @@ microApp.start({
       return res.text()
     })
   },
+  excludeAssetFilter (assetUrl) {
+    if (assetUrl === 'http://127.0.0.1:8080/js/defer.js') {
+      return true
+    } else if (assetUrl === 'http://127.0.0.1:8080/facefont.css') {
+      return true
+    }
+    return false
+  },
+  // globalAssets: {
+  //   js: ['http://127.0.0.1:8080/a.js'], // js地址
+  //   css: ['http://127.0.0.1:8080/test.css'], // css地址
+  // }
 })
+
+// microApp.start({
+//   plugins: {
+//     global: [
+//       {
+//         scopeProperties: ['AMap'],
+//       }
+//     ],
+//   },
+// })
 
 // ----------------------分割线--测试全局方法--------------------- //
 // setTimeout(() => {
 //   unmountAllApps({
-//     destroy: true,
+//     destroy: false,
 //     clearAliveState: true,
 //   }).then(() => {
 //     console.log('unmountAllApps方法 -- 主动卸载所有应用成功')
 //   })
 // }, 10000)
 
-window.addEventListener('popstate', (e) => {
-  // const a = document.createElement('div')
-  //   a.innerHTML = '55555555'
-  //   document.body.appendChild(a)
-  console.log('popstate', e, window.location.href)
-  // history.replaceState(history.state, '', location.href)
-})
-
 window.addEventListener('hashchange', (e) => {
   // const a = document.createElement('div')
   //   a.innerHTML = '666666666'
   //   document.body.appendChild(a)
-  console.log('hashchange', e, e.newURL, e.oldURL)
+  console.log('基座 hashchange', e,)
 })
+
+window.addEventListener('popstate', (e) => {
+  // const a = document.createElement('div')
+  //   a.innerHTML = '55555555'
+  //   document.body.appendChild(a)
+  console.log('基座 popstate', 'state:', e.state)
+  // history.replaceState(history.state, '', location.href)
+})
+
+window.onpopstate = function () {
+  console.log('基座 window.onpopstate 触发')
+}
+
+window.onhashchange = function () {
+  console.log('基座 window.onhashchange 触发')
+}
+
+window.onclick = function () {
+  console.log(`基座 window.onclick`)
+}
+
+// window.addEventListener('click', function (event) {
+//   console.log(`基座`, event instanceof PointerEvent, this)
+// }, false)
+
+
+/* ---------------------- 测试unhandledrejection --------------------- */
+// window.addEventListener('unhandledrejection', (event) => {
+//   console.error(`基座Promise报错监听 -- window.addEventListener(unhandledrejection): `, event)
+//   event.preventDefault()
+// })
+
+// window.onunhandledrejection = (event) => {
+//   console.error(`基座Promise报错监听 -- window.onunhandledrejection: `, event);
+// }
+
+/* ---------------------- 测试message, postMessage --------------------- */
+// window.addEventListener('message', function(event) {
+//   console.log('基座监听的message事件', event.data, event)
+// })
+
+window.insertNodeFromBaseApp = function () {
+  const div = window.document.createElement('div')
+  div.innerHTML = 'insertNodeFromBaseApp'
+  document.body.appendChild(div)
+}

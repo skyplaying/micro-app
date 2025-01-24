@@ -1,6 +1,6 @@
 import { AppInterface, plugins } from '@micro-app/types'
 import { fetchSource } from '../fetch'
-import { isFunction, isPlainObject, logError } from '../../libs/utils'
+import { isFunction, isPlainObject, logError, isTargetExtension } from '../../libs/utils'
 import microApp from '../../micro_app'
 
 export interface IHTMLLoader {
@@ -24,7 +24,11 @@ export class HTMLLoader implements IHTMLLoader {
   public run (app: AppInterface, successCb: CallableFunction): void {
     const appName = app.name
     const htmlUrl = app.ssrUrl || app.url
-    fetchSource(htmlUrl, appName, { cache: 'no-cache' }).then((htmlStr: string) => {
+    const isJsResource = isTargetExtension(htmlUrl, 'js')
+    const htmlPromise = isJsResource
+      ? Promise.resolve(`<micro-app-head><script src='${htmlUrl}'></script></micro-app-head><micro-app-body></micro-app-body>`)
+      : fetchSource(htmlUrl, appName, { cache: 'no-cache' })
+    htmlPromise.then((htmlStr: string) => {
       if (!htmlStr) {
         const msg = 'html is empty, please check in detail'
         app.onerror(new Error(msg))
@@ -41,7 +45,7 @@ export class HTMLLoader implements IHTMLLoader {
   }
 
   private formatHTML (htmlUrl: string, htmlStr: string, appName: string) {
-    return this.processHtml(htmlUrl, htmlStr, appName, microApp.plugins)
+    return this.processHtml(htmlUrl, htmlStr, appName, microApp.options.plugins)
       .replace(/<head[^>]*>[\s\S]*?<\/head>/i, (match) => {
         return match
           .replace(/<head/i, '<micro-app-head')
@@ -54,7 +58,7 @@ export class HTMLLoader implements IHTMLLoader {
       })
   }
 
-  private processHtml (url: string, code: string, appName: string, plugins: plugins | undefined): string {
+  private processHtml (url: string, code: string, appName: string, plugins: plugins | void): string {
     if (!plugins) return code
 
     const mergedPlugins: NonNullable<plugins['global']> = []

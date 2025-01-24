@@ -1,4 +1,4 @@
-/* eslint-disable node/no-callback-literal */
+/* eslint-disable node/no-callback-literal, no-void */
 import type {
   AppInterface,
   ScriptSourceInfo,
@@ -6,6 +6,7 @@ import type {
   Func,
   fiberTasks,
   AttrsType,
+  microAppWindowType,
 } from '@micro-app/types'
 import { fetchSource } from './fetch'
 import {
@@ -20,8 +21,10 @@ import {
   isArray,
   isFunction,
   getAttributes,
-  promiseRequestIdle,
+  injectFiberTask,
   serialExecFiberTasks,
+  isInlineScript,
+  isString,
 } from '../libs/utils'
 import {
   dispatchOnLoadEvent,
@@ -29,21 +32,33 @@ import {
 } from './load_event'
 import microApp from '../micro_app'
 import globalEnv from '../libs/global_env'
-import { globalKeyToBeCached } from '../libs/constants'
+import { GLOBAL_CACHED_KEY } from '../constants'
 import sourceCenter from './source_center'
 
 export type moduleCallBack = Func & { moduleCount?: number, errorCount?: number }
 
+const scriptTypes = ['text/javascript', 'text/ecmascript', 'application/javascript', 'application/ecmascript', 'module', 'systemjs-module', 'systemjs-importmap']
+
+// whether use type='module' script
 function isTypeModule (app: AppInterface, scriptInfo: ScriptSourceInfo): boolean {
-  return scriptInfo.appSpace[app.name].module && (!app.useSandbox || app.esmodule)
+  return scriptInfo.appSpace[app.name].module && (!app.useSandbox || app.iframe)
 }
 
+// special script element
 function isSpecialScript (app: AppInterface, scriptInfo: ScriptSourceInfo): boolean {
   const attrs = scriptInfo.appSpace[app.name].attrs
-  return attrs.has('id') || attrs.has('class')
+  return attrs.has('id')
 }
 
-function isInlineScript (app: AppInterface, scriptInfo: ScriptSourceInfo): boolean {
+/**
+ * whether to run js in inline mode
+ * scene:
+ * 1. inline config for app
+ * 2. inline attr in script element
+ * 3. module script
+ * 4. script with special attr
+ */
+function isInlineMode (app: AppInterface, scriptInfo: ScriptSourceInfo): boolean {
   return (
     app.inline ||
     scriptInfo.appSpace[app.name].inline ||
@@ -52,16 +67,52 @@ function isInlineScript (app: AppInterface, scriptInfo: ScriptSourceInfo): boole
   )
 }
 
-function getExistParseResult (scriptInfo: ScriptSourceInfo, currentCode: string): Function | void {
+// TODO: iframe重新插入window前后不一致，通过iframe Function创建的函数无法复用
+function getEffectWindow (app: AppInterface): microAppWindowType {
+  return app.iframe ? app.sandBox.microAppWindow : globalEnv.rawWindow
+}
+
+// Convert string code to function
+function code2Function (app: AppInterface, code: string): Function {
+  const targetWindow = getEffectWindow(app)
+  return new targetWindow.Function(code)
+}
+
+/**
+ * If the appSpace of the current js address has other app, try to reuse parsedFunction of other app
+ * @param appName app.name
+ * @param scriptInfo scriptInfo of current address
+ * @param currentCode pure code of current address
+ */
+function getExistParseResult (
+  app: AppInterface,
+  scriptInfo: ScriptSourceInfo,
+  currentCode: string,
+): Function | void {
   const appSpace = scriptInfo.appSpace
-  for (const appName in scriptInfo.appSpace) {
-    const appSpaceData = appSpace[appName]
-    if (appSpaceData.parsedCode === currentCode && appSpaceData.parsedFunction) {
-      return appSpaceData.parsedFunction
+  for (const item in appSpace) {
+    if (item !== app.name) {
+      const appSpaceData = appSpace[item]
+      if (appSpaceData.parsedCode === currentCode && appSpaceData.parsedFunction) {
+        return appSpaceData.parsedFunction
+      }
     }
   }
 }
 
+/**
+ * get parsedFunction from exist data or parsedCode
+ * @returns parsedFunction
+ */
+function getParsedFunction (
+  app: AppInterface,
+  scriptInfo: ScriptSourceInfo,
+  parsedCode: string,
+): Function {
+  return getExistParseResult(app, scriptInfo, parsedCode) || code2Function(app, parsedCode)
+}
+
+// Prevent randomly created strings from repeating
 function getUniqueNonceSrc (): string {
   const nonceStr: string = createNonceSrc()
   if (sourceCenter.script.hasInfo(nonceStr)) {
@@ -70,18 +121,22 @@ function getUniqueNonceSrc (): string {
   return nonceStr
 }
 
-function code2Function (code: string): Function {
-  return new Function(code)
-}
-
 // transfer the attributes on the script to convertScript
 function setConvertScriptAttr (convertScript: HTMLScriptElement, attrs: AttrsType): void {
   attrs.forEach((value, key) => {
-    if (key !== 'type' || value !== 'module') {
-      if (key === 'src') key = 'data-origin-src'
-      convertScript.setAttribute(key, value)
-    }
+    if ((key === 'type' && value === 'module') || key === 'defer' || key === 'async') return
+    if (key === 'src') key = 'data-origin-src'
+    globalEnv.rawSetAttribute.call(convertScript, key, value)
   })
+}
+
+// wrap code in sandbox
+function isWrapInSandBox (app: AppInterface, scriptInfo: ScriptSourceInfo): boolean {
+  return app.useSandbox && !isTypeModule(app, scriptInfo)
+}
+
+function getSandboxType (app: AppInterface, scriptInfo: ScriptSourceInfo): 'with' | 'iframe' | 'disable' {
+  return isWrapInSandBox(app, scriptInfo) ? app.iframe ? 'iframe' : 'with' : 'disable'
 }
 
 /**
@@ -93,7 +148,7 @@ function setConvertScriptAttr (convertScript: HTMLScriptElement, attrs: AttrsTyp
  */
 export function extractScriptElement (
   script: HTMLScriptElement,
-  parent: Node,
+  parent: Node | null,
   app: AppInterface,
   isDynamic = false,
 ): any {
@@ -103,9 +158,17 @@ export function extractScriptElement (
   if (script.hasAttribute('exclude') || checkExcludeUrl(src, app.name)) {
     replaceComment = document.createComment('script element with exclude attribute removed by micro-app')
   } else if (
-    (script.type && !['text/javascript', 'text/ecmascript', 'application/javascript', 'application/ecmascript', 'module', 'systemjs-module', 'systemjs-importmap'].includes(script.type)) ||
-    script.hasAttribute('ignore') || checkIgnoreUrl(src, app.name)
+    (
+      script.type &&
+      !scriptTypes.includes(script.type)
+    ) ||
+    script.hasAttribute('ignore') ||
+    checkIgnoreUrl(src, app.name)
   ) {
+    // 配置为忽略的脚本，清空 rawDocument.currentScript，避免被忽略的脚本内获取 currentScript 出错
+    if (globalEnv.rawDocument?.currentScript) {
+      delete globalEnv.rawDocument.currentScript
+    }
     return null
   } else if (
     (globalEnv.supportModuleScript && script.noModule) ||
@@ -115,11 +178,11 @@ export function extractScriptElement (
   } else if (src) { // remote script
     let scriptInfo = sourceCenter.script.getInfo(src)
     const appSpaceData = {
-      isDynamic: isDynamic,
       async: script.hasAttribute('async'),
       defer: script.defer || script.type === 'module',
       module: script.type === 'module',
       inline: script.hasAttribute('inline'),
+      pure: script.hasAttribute('pure'),
       attrs: getAttributes(script),
     }
     if (!scriptInfo) {
@@ -131,11 +194,19 @@ export function extractScriptElement (
         }
       }
     } else {
+      /**
+       * Reuse when appSpace exists
+       * NOTE:
+       * 1. The same static script, appSpace must be the same (in fact, it may be different when url change)
+       * 2. The same dynamic script, appSpace may be the same, but we still reuse appSpace, which should pay attention
+       */
       scriptInfo.appSpace[app.name] = scriptInfo.appSpace[app.name] || appSpaceData
     }
+
+    sourceCenter.script.setInfo(src, scriptInfo)
+
     if (!isDynamic) {
       app.source.scripts.add(src)
-      sourceCenter.script.setInfo(src, scriptInfo)
       replaceComment = document.createComment(`script with src='${src}' extract by micro-app`)
     } else {
       return { address: src, scriptInfo }
@@ -155,11 +226,11 @@ export function extractScriptElement (
       isExternal: false,
       appSpace: {
         [app.name]: {
-          isDynamic: isDynamic,
           async: false,
           defer: script.type === 'module',
           module: script.type === 'module',
           inline: script.hasAttribute('inline'),
+          pure: script.hasAttribute('pure'),
           attrs: getAttributes(script),
         }
       }
@@ -169,6 +240,7 @@ export function extractScriptElement (
       sourceCenter.script.setInfo(nonceStr, scriptInfo)
       replaceComment = document.createComment('inline script extract by micro-app')
     } else {
+      // Because each dynamic script is unique, it is not put into sourceCenter
       return { address: nonceStr, scriptInfo }
     }
   } else if (!isDynamic) {
@@ -182,7 +254,7 @@ export function extractScriptElement (
   if (isDynamic) {
     return { replaceComment }
   } else {
-    return parent.replaceChild(replaceComment!, script)
+    return parent?.replaceChild(replaceComment!, script)
   }
 }
 
@@ -191,8 +263,8 @@ export function extractScriptElement (
  * @param appName app name
  */
 export function getAssetsPlugins (appName: string): plugins['global'] {
-  const globalPlugins = microApp.plugins?.global || []
-  const modulePlugins = microApp.plugins?.modules?.[appName] || []
+  const globalPlugins = microApp.options.plugins?.global || []
+  const modulePlugins = microApp.options.plugins?.modules?.[appName] || []
 
   return [...globalPlugins, ...modulePlugins]
 }
@@ -240,7 +312,7 @@ export function fetchScriptsFromHtml (
   for (const address of scriptList) {
     const scriptInfo = sourceCenter.script.getInfo(address)!
     const appSpaceData = scriptInfo.appSpace[app.name]
-    if ((!appSpaceData.defer && !appSpaceData.async) || app.isPrefetch) {
+    if ((!appSpaceData.defer && !appSpaceData.async) || (app.isPrefetch && !app.isPrerender)) {
       fetchScriptPromise.push(scriptInfo.code ? scriptInfo.code : fetchSource(address, app.name))
       fetchScriptPromiseInfo.push([address, scriptInfo])
     }
@@ -250,36 +322,24 @@ export function fetchScriptsFromHtml (
 
   if (fetchScriptPromise.length) {
     promiseStream<string>(fetchScriptPromise, (res: {data: string, index: number}) => {
-      if (fiberScriptTasks) {
-        fiberScriptTasks.push(() => promiseRequestIdle((resolve: PromiseConstructor['resolve']) => {
-          fetchScriptSuccess(
-            fetchScriptPromiseInfo[res.index][0],
-            fetchScriptPromiseInfo[res.index][1],
-            res.data,
-            app,
-          )
-          resolve()
-        }))
-      } else {
-        fetchScriptSuccess(
-          fetchScriptPromiseInfo[res.index][0],
-          fetchScriptPromiseInfo[res.index][1],
-          res.data,
-          app,
-        )
-      }
+      injectFiberTask(fiberScriptTasks, () => fetchScriptSuccess(
+        fetchScriptPromiseInfo[res.index][0],
+        fetchScriptPromiseInfo[res.index][1],
+        res.data,
+        app,
+      ))
     }, (err: {error: Error, index: number}) => {
       logError(err, app.name)
     }, () => {
       if (fiberScriptTasks) {
-        fiberScriptTasks.push(() => Promise.resolve(app.onLoad(wrapElement)))
+        fiberScriptTasks.push(() => Promise.resolve(app.onLoad({ html: wrapElement })))
         serialExecFiberTasks(fiberScriptTasks)
       } else {
-        app.onLoad(wrapElement)
+        app.onLoad({ html: wrapElement })
       }
     })
   } else {
-    app.onLoad(wrapElement)
+    app.onLoad({ html: wrapElement })
   }
 }
 
@@ -305,11 +365,25 @@ export function fetchScriptSuccess (
    * 2. if app is inline or script is esmodule, skip this step
    * 3. if global parseResult not exist, the current script occupies the position, when js is reused, parseResult is reference
    */
-  if (app.isPrefetch) {
+  if (app.isPrefetch && app.prefetchLevel === 2) {
     const appSpaceData = scriptInfo.appSpace[app.name]
-    appSpaceData.parsedCode = bindScope(address, app, code, scriptInfo)
-    if (!isInlineScript(app, scriptInfo)) {
-      appSpaceData.parsedFunction = getExistParseResult(scriptInfo, appSpaceData.parsedCode) || code2Function(appSpaceData.parsedCode)
+    /**
+     * When prefetch app is replaced by a new app in the processing phase, since the scriptInfo is common, when the scriptInfo of the prefetch app is processed, it may have already been processed.
+     * This causes parsedCode to already exist when preloading ends
+     * e.g.
+     * 1. prefetch app.url different from <micro-app></micro-app>
+     * 2. prefetch param different from <micro-app></micro-app>
+     */
+    if (!appSpaceData.parsedCode) {
+      appSpaceData.parsedCode = bindScope(address, app, code, scriptInfo)
+      appSpaceData.sandboxType = getSandboxType(app, scriptInfo)
+      if (!isInlineMode(app, scriptInfo)) {
+        try {
+          appSpaceData.parsedFunction = getParsedFunction(app, scriptInfo, appSpaceData.parsedCode)
+        } catch (err) {
+          logError('Something went wrong while handling preloaded resources', app.name, '\n', err)
+        }
+      }
     }
   }
 }
@@ -323,6 +397,7 @@ export function execScripts (
   app: AppInterface,
   initHook: moduleCallBack,
 ): void {
+  const fiberScriptTasks: fiberTasks = app.fiber ? [] : null
   const scriptList: Array<string> = Array.from(app.source.scripts)
   const deferScriptPromise: Array<Promise<string>|string> = []
   const deferScriptInfo: Array<[string, ScriptSourceInfo]> = []
@@ -331,7 +406,8 @@ export function execScripts (
     const appSpaceData = scriptInfo.appSpace[app.name]
     // Notice the second render
     if (appSpaceData.defer || appSpaceData.async) {
-      if (scriptInfo.isExternal && !scriptInfo.code) {
+      // TODO: defer和module彻底分开，不要混在一起
+      if (scriptInfo.isExternal && !scriptInfo.code && !isTypeModule(app, scriptInfo)) {
         deferScriptPromise.push(fetchSource(address, app.name))
       } else {
         deferScriptPromise.push(scriptInfo.code)
@@ -340,8 +416,10 @@ export function execScripts (
 
       isTypeModule(app, scriptInfo) && (initHook.moduleCount = initHook.moduleCount ? ++initHook.moduleCount : 1)
     } else {
-      runScript(address, app, scriptInfo, false)
-      initHook(false)
+      injectFiberTask(fiberScriptTasks, () => {
+        runScript(address, app, scriptInfo)
+        initHook(false)
+      })
     }
   }
 
@@ -354,18 +432,42 @@ export function execScripts (
       logError(err, app.name)
     }, () => {
       deferScriptInfo.forEach(([address, scriptInfo]) => {
-        if (scriptInfo.code) {
-          runScript(address, app, scriptInfo, false, initHook)
-          !isTypeModule(app, scriptInfo) && initHook(false)
+        if (isString(scriptInfo.code)) {
+          injectFiberTask(fiberScriptTasks, () => {
+            runScript(address, app, scriptInfo, initHook)
+            !isTypeModule(app, scriptInfo) && initHook(false)
+          })
         }
       })
-      initHook(
-        isUndefined(initHook.moduleCount) ||
-        initHook.errorCount === deferScriptPromise.length
-      )
+
+      /**
+       * Fiber wraps js in requestIdleCallback and executes it in sequence
+       * NOTE:
+       * 1. In order to ensure the execution order, wait for all js loaded and then execute
+       * 2. If js create a dynamic script, it may be errors in the execution order, because the subsequent js is wrapped in requestIdleCallback, even putting dynamic script in requestIdleCallback doesn't solve it
+       *
+       * BUG: NOTE.2 - execution order problem
+       */
+      if (fiberScriptTasks) {
+        fiberScriptTasks.push(() => Promise.resolve(initHook(
+          isUndefined(initHook.moduleCount) ||
+          initHook.errorCount === deferScriptPromise.length
+        )))
+        serialExecFiberTasks(fiberScriptTasks)
+      } else {
+        initHook(
+          isUndefined(initHook.moduleCount) ||
+          initHook.errorCount === deferScriptPromise.length
+        )
+      }
     })
   } else {
-    initHook(true)
+    if (fiberScriptTasks) {
+      fiberScriptTasks.push(() => Promise.resolve(initHook(true)))
+      serialExecFiberTasks(fiberScriptTasks)
+    } else {
+      initHook(true)
+    }
   }
 }
 
@@ -374,34 +476,37 @@ export function execScripts (
  * @param address script address
  * @param app app
  * @param scriptInfo script info
- * @param isDynamic dynamically created script
  * @param callback callback of module script
  */
 export function runScript (
   address: string,
   app: AppInterface,
   scriptInfo: ScriptSourceInfo,
-  isDynamic: boolean,
   callback?: moduleCallBack,
-): any {
+  replaceElement?: HTMLScriptElement,
+): void {
   try {
-    preActionForExecScript(app)
+    actionsBeforeRunScript(app)
     const appSpaceData = scriptInfo.appSpace[app.name]
-    const currentCode = bindScope(address, app, scriptInfo.code, scriptInfo)
+    const sandboxType = getSandboxType(app, scriptInfo)
     /**
-     * TIP:
-     * 1. if parsedCode not exist, parsedFunction is not exist
-     * 2. if currentCode is different from parsedCode, update parsedCode with parsedCode and clear parsedFunction
+     * NOTE:
+     * 1. plugins and wrapCode will only be executed once
+     * 2. if parsedCode not exist, parsedFunction is not exist
+     * 3. if parsedCode exist, parsedFunction does not necessarily exist
      */
-    if (!appSpaceData.parsedCode) {
-      appSpaceData.parsedCode = currentCode
-    } else if (appSpaceData.parsedCode !== currentCode) {
-      appSpaceData.parsedCode = currentCode
+    if (!appSpaceData.parsedCode || appSpaceData.sandboxType !== sandboxType) {
+      appSpaceData.parsedCode = bindScope(address, app, scriptInfo.code, scriptInfo)
+      appSpaceData.sandboxType = sandboxType
       appSpaceData.parsedFunction = null
     }
 
-    if (isInlineScript(app, scriptInfo)) {
-      const scriptElement = pureCreateElement('script')
+    /**
+     * TODO: 优化逻辑
+     * 是否是内联模式应该由外部传入，这样自外而内更加统一，逻辑更加清晰
+     */
+    if (isInlineMode(app, scriptInfo)) {
+      const scriptElement = replaceElement || pureCreateElement('script')
       runCode2InlineScript(
         address,
         appSpaceData.parsedCode,
@@ -410,79 +515,88 @@ export function runScript (
         appSpaceData.attrs,
         callback,
       )
-      if (isDynamic) return scriptElement
-      // TEST IGNORE
-      app.container?.querySelector('micro-app-body')!.appendChild(scriptElement)
+
+      /**
+       * TODO: 优化逻辑
+       * replaceElement不存在说明是初始化执行，需要主动插入script
+       * 但这里的逻辑不清晰，应该明确声明是什么环境下才需要主动插入，而不是用replaceElement间接判断
+       * replaceElement还有可能是注释类型(一定是在后台执行)，这里的判断都是间接判断，不够直观
+       */
+      if (!replaceElement) {
+        // TEST IGNORE
+        const parent = app.iframe ? app.sandBox?.microBody : app.querySelector('micro-app-body')
+        parent?.appendChild(scriptElement)
+      }
     } else {
       runParsedFunction(app, scriptInfo)
-      if (isDynamic) return document.createComment('dynamic script extract by micro-app')
     }
   } catch (e) {
-    console.error(`[micro-app from runScript] app ${app.name}: `, e)
+    console.error(`[micro-app from ${replaceElement ? 'runDynamicScript' : 'runScript'}] app ${app.name}: `, e, address)
+    // throw error in with sandbox to parent app
+    throw e
   }
 }
 
 /**
  * Get dynamically created remote script
  * @param address script address
+ * @param app app instance
  * @param scriptInfo scriptInfo
- * @param app app
  * @param originScript origin script element
  */
 export function runDynamicRemoteScript (
   address: string,
-  scriptInfo: ScriptSourceInfo,
   app: AppInterface,
+  scriptInfo: ScriptSourceInfo,
   originScript: HTMLScriptElement,
 ): HTMLScriptElement | Comment {
+  const replaceElement = isInlineMode(app, scriptInfo) ? pureCreateElement('script') : document.createComment(`dynamic script with src='${address}' extract by micro-app`)
+
   const dispatchScriptOnLoadEvent = () => dispatchOnLoadEvent(originScript)
 
-  if (scriptInfo.code) {
-    !isTypeModule(app, scriptInfo) && defer(dispatchScriptOnLoadEvent)
-    /**
-     * TODO: 这里要改，当script初始化时动态创建远程script时，初次渲染和二次渲染的顺序不一致，会导致错误
-     * 1、url不存在缓存，初始化的时候肯定是要异步请求，那么执行顺序就会靠后，至少落后于html自带的script
-     * 2、url存在缓存，那么二次渲染的时候这里会同步执行，就会先于html自带的script执行
-     * 3、测试一下，初次渲染和二次渲染时，onload的执行时机，是在js执行完成，还是执行之前
-     * 4、将上述问题做成注释，方便后续阅读和理解
-     */
-    return runScript(address, app, scriptInfo, true, dispatchScriptOnLoadEvent)
-  }
-
-  let replaceElement: Comment | HTMLScriptElement
-  if (isInlineScript(app, scriptInfo)) {
-    replaceElement = pureCreateElement('script')
-  } else {
-    replaceElement = document.createComment(`dynamic script with src='${address}' extract by micro-app`)
-  }
-
-  fetchSource(address, app.name).then((code: string) => {
-    scriptInfo.code = code
-    sourceCenter.script.setInfo(address, scriptInfo)
-    const appSpaceData = scriptInfo.appSpace[app.name]
-    try {
-      preActionForExecScript(app)
-      appSpaceData.parsedCode = bindScope(address, app, code, scriptInfo)
-      if (isInlineScript(app, scriptInfo)) {
-        runCode2InlineScript(
-          address,
-          appSpaceData.parsedCode,
-          isTypeModule(app, scriptInfo),
-          replaceElement as HTMLScriptElement,
-          appSpaceData.attrs,
-          dispatchScriptOnLoadEvent,
-        )
-      } else {
-        runParsedFunction(app, scriptInfo)
-      }
-    } catch (e) {
-      console.error(`[micro-app from runDynamicScript] app ${app.name}: `, e, address)
+  const runDynamicScript = () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalEnv.rawDocument, 'currentScript')
+    if (!descriptor || descriptor.configurable) {
+      Object.defineProperty(globalEnv.rawDocument, 'currentScript', {
+        value: originScript,
+        configurable: true,
+      })
     }
+
+    runScript(address, app, scriptInfo, dispatchScriptOnLoadEvent, replaceElement as HTMLScriptElement)
+
     !isTypeModule(app, scriptInfo) && dispatchScriptOnLoadEvent()
-  }).catch((err) => {
-    logError(err, app.name)
-    dispatchOnErrorEvent(originScript)
-  })
+  }
+
+  if (scriptInfo.code || isTypeModule(app, scriptInfo)) {
+    defer(runDynamicScript)
+  } else {
+    fetchSource(address, app.name).then((code: string) => {
+      scriptInfo.code = code
+      runDynamicScript()
+    }).catch((err) => {
+      logError(err, app.name)
+      dispatchOnErrorEvent(originScript)
+    })
+  }
+
+  return replaceElement
+}
+
+/**
+ * Get dynamically created inline script
+ * @param address script address
+ * @param app app instance
+ * @param scriptInfo scriptInfo
+ */
+export function runDynamicInlineScript (
+  address: string,
+  app: AppInterface,
+  scriptInfo: ScriptSourceInfo,
+): HTMLScriptElement | Comment {
+  const replaceElement = isInlineMode(app, scriptInfo) ? pureCreateElement('script') : document.createComment('dynamic inline script extract by micro-app')
+
+  runScript(address, app, scriptInfo, void 0, replaceElement as HTMLScriptElement)
 
   return replaceElement
 }
@@ -493,6 +607,7 @@ export function runDynamicRemoteScript (
  * @param code bound code
  * @param module type='module' of script
  * @param scriptElement target script element
+ * @param attrs attributes of script element
  * @param callback callback of module script
  */
 function runCode2InlineScript (
@@ -504,14 +619,31 @@ function runCode2InlineScript (
   callback?: moduleCallBack,
 ): void {
   if (module) {
-    // module script is async, transform it to a blob for subsequent operations
-    // const blob = new Blob([code], { type: 'text/javascript' })
-    // scriptElement.src = URL.createObjectURL(blob)
-    scriptElement.src = address
-    scriptElement.setAttribute('type', 'module')
+    globalEnv.rawSetAttribute.call(scriptElement, 'type', 'module')
+    if (isInlineScript(address)) {
+      /**
+       * inline module script cannot convert to blob mode
+       * Issue: https://github.com/jd-opensource/micro-app/issues/805
+       */
+      scriptElement.textContent = code
+    } else {
+      scriptElement.src = address
+    }
     if (callback) {
-      callback.moduleCount && callback.moduleCount--
-      scriptElement.onload = callback.bind(scriptElement, callback.moduleCount === 0)
+      const onloadHandler = () => {
+        callback.moduleCount && callback.moduleCount--
+        callback(callback.moduleCount === 0)
+      }
+      /**
+       * NOTE:
+       *  1. module script will execute onload method only after it insert to document/iframe
+       *  2. we can't know when the inline module script onload, and we use defer to simulate, this maybe cause some problems
+       */
+      if (isInlineScript(address)) {
+        defer(onloadHandler)
+      } else {
+        scriptElement.onload = onloadHandler
+      }
     }
   } else {
     scriptElement.textContent = code
@@ -524,9 +656,9 @@ function runCode2InlineScript (
 function runParsedFunction (app: AppInterface, scriptInfo: ScriptSourceInfo) {
   const appSpaceData = scriptInfo.appSpace[app.name]
   if (!appSpaceData.parsedFunction) {
-    appSpaceData.parsedFunction = getExistParseResult(scriptInfo, appSpaceData.parsedCode!) || code2Function(appSpaceData.parsedCode!)
+    appSpaceData.parsedFunction = getParsedFunction(app, scriptInfo, appSpaceData.parsedCode!)
   }
-  appSpaceData.parsedFunction.call(window)
+  appSpaceData.parsedFunction.call(getEffectWindow(app))
 }
 
 /**
@@ -541,22 +673,28 @@ function bindScope (
   code: string,
   scriptInfo: ScriptSourceInfo,
 ): string {
-  // TODO: 增加缓存机制
-  if (isPlainObject(microApp.plugins)) {
-    code = usePlugins(address, code, app.name, microApp.plugins)
+  // TODO: 1、cache 2、esm code is null
+  if (isPlainObject(microApp.options.plugins)) {
+    code = usePlugins(address, code, app.name, microApp.options.plugins)
   }
 
-  if (app.sandBox && !isTypeModule(app, scriptInfo)) {
-    return `;(function(proxyWindow){with(proxyWindow.__MICRO_APP_WINDOW__){(function(${globalKeyToBeCached}){;${code}\n${address.startsWith('inline-') ? '' : `//# sourceURL=${address}\n`}}).call(proxyWindow,${globalKeyToBeCached})}})(window.__MICRO_APP_PROXY_WINDOW__);`
+  if (isWrapInSandBox(app, scriptInfo)) {
+    return app.iframe ? `(function(window,self,global,location){;${code}\n${isInlineScript(address) ? '' : `//# sourceURL=${address}\n`}}).call(window.__MICRO_APP_SANDBOX__.proxyWindow,window.__MICRO_APP_SANDBOX__.proxyWindow,window.__MICRO_APP_SANDBOX__.proxyWindow,window.__MICRO_APP_SANDBOX__.proxyWindow,window.__MICRO_APP_SANDBOX__.proxyLocation);` : `;(function(proxyWindow){with(proxyWindow.__MICRO_APP_WINDOW__){(function(${GLOBAL_CACHED_KEY}){;${code}\n${isInlineScript(address) ? '' : `//# sourceURL=${address}\n`}}).call(proxyWindow,${GLOBAL_CACHED_KEY})}})(window.__MICRO_APP_PROXY_WINDOW__);`
   }
 
   return code
 }
 
-function preActionForExecScript (app: AppInterface) {
+/**
+ * actions before run script
+ */
+function actionsBeforeRunScript (app: AppInterface): void {
   setActiveProxyWindow(app)
 }
 
+/**
+ * set active sandBox.proxyWindow to window.__MICRO_APP_PROXY_WINDOW__
+ */
 function setActiveProxyWindow (app: AppInterface): void {
   if (app.sandBox) {
     globalEnv.rawWindow.__MICRO_APP_PROXY_WINDOW__ = app.sandBox.proxyWindow

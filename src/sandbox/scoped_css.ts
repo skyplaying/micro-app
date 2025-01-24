@@ -75,7 +75,7 @@ class CSSParser {
     // reset scopecssDisableNextLine
     this.scopecssDisableNextLine = false
 
-    if (!selectors) return parseError('selector missing', this.linkPath)
+    if (!selectors) return this.printError('selector missing', this.linkPath)
 
     this.recordResult(selectors)
 
@@ -92,9 +92,37 @@ class CSSParser {
     const m = this.commonMatch(/^[^{]+/, skip)
     if (!m) return false
 
-    return m[0].replace(/(^|,[\n\s]*)([^,]+)/g, (_, separator, selector) => {
+    /**
+     * NOTE:
+     *  1. :is(h1, h2, h3):has(+ h2, + h3, + h4) {}
+     *    should be ==> micro-app[name=xxx] :is(h1, h2, h3):has(+ h2, + h3, + h4) {}
+     *  2. :dir(ltr) {}
+     *    should be ==> micro-app[name=xxx] :dir(ltr) {}
+     *  3. body :not(div, .fancy) {}
+     *    should be ==> micro-app[name=xxx] micro-app-body :not(div, .fancy) {}
+     *  4. .a, .b, li:nth-child(3)
+     *    should be ==> micro-app[name=xxx] .a, micro-app[name=xxx] .b, micro-app[name=xxx] li:nth-child(3)
+     *  5. :is(.a, .b, .c) a {}
+     *    should be ==> micro-app[name=xxx] :is(.a, .b, .c) a {}
+     *  6. :where(.a, .b, .c) a {}
+     *    should be ==> micro-app[name=xxx] :where(.a, .b, .c) a {}
+     */
+    const attributeValues: {[key: string]: any} = {}
+    const matchRes = m[0].replace(/\[([^\]=]+)(?:=([^\]]+))?\]/g, (match, p1, p2) => {
+      const mock = `__mock_${p1}Value__`
+      attributeValues[mock] = p2
+      return match.replace(p2, mock)
+    })
+
+    return matchRes.replace(/(^|,[\n\s]*)([^,]+)/g, (_, separator, selector) => {
       selector = trim(selector)
-      if (!(
+      selector = selector.replace(/\[[^\]=]+(?:=([^\]]+))?\]/g, (match:string, p1: string) => {
+        if (attributeValues[p1]) {
+          return match.replace(p1, attributeValues[p1])
+        }
+        return match
+      })
+      if (selector && !(
         this.scopecssDisableNextLine ||
         (
           this.scopecssDisable && (
@@ -117,25 +145,25 @@ class CSSParser {
 
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleDeclaration
   private styleDeclarations (): boolean | void {
-    if (!this.matchOpenBrace()) return parseError("Declaration missing '{'", this.linkPath)
+    if (!this.matchOpenBrace()) return this.printError("Declaration missing '{'", this.linkPath)
 
     this.matchAllDeclarations()
 
-    if (!this.matchCloseBrace()) return parseError("Declaration missing '}'", this.linkPath)
+    if (!this.matchCloseBrace()) return this.printError("Declaration missing '}'", this.linkPath)
 
     return true
   }
 
-  private matchAllDeclarations (): void {
-    let cssValue = (this.commonMatch(/^(?:url\(["']?(?:[^)"'}]+)["']?\)|[^}/])*/, true) as RegExpExecArray)[0]
+  private matchAllDeclarations (nesting = 0): void {
+    let cssValue = (this.commonMatch(/^(?:url\(["']?(?:[^)"'}]+)["']?\)|[^{}/])*/, true) as RegExpExecArray)[0]
 
     if (cssValue) {
       if (
         !this.scopecssDisableNextLine &&
         (!this.scopecssDisable || this.scopecssDisableSelectors.length)
       ) {
-        cssValue = cssValue.replace(/url\(["']?([^)"']+)["']?\)/gm, (all, $1) => {
-          if (/^((data|blob):|#)/.test($1) || /^(https?:)?\/\//.test($1)) {
+        cssValue = cssValue.replace(/url\((["']?)(.*?)\1\)/gm, (all, _, $1) => {
+          if (/^((data|blob):|#|%23)/.test($1) || /^(https?:)?\/\//.test($1)) {
             return all
           }
 
@@ -154,23 +182,31 @@ class CSSParser {
     // reset scopecssDisableNextLine
     this.scopecssDisableNextLine = false
 
-    if (!this.cssText || this.cssText.charAt(0) === '}') return
+    if (!this.cssText.length) return
 
     // extract comments in declarations
-    if (this.cssText.charAt(0) === '/' && this.cssText.charAt(1) === '*') {
-      this.matchComments()
-    } else {
-      this.commonMatch(/\/+/)
+    if (this.cssText.charAt(0) === '/') {
+      if (this.cssText.charAt(1) === '*') {
+        this.matchComments()
+      } else {
+        this.commonMatch(/\/+/)
+      }
+    } else if (this.cssText.charAt(0) === '{') {
+      this.matchOpenBrace()
+      nesting++
+    } else if (this.cssText.charAt(0) === '}') {
+      if (nesting < 1) return
+      this.matchCloseBrace()
+      nesting--
     }
 
-    return this.matchAllDeclarations()
+    return this.matchAllDeclarations(nesting)
   }
 
   private matchAtRule (): boolean | void {
     if (this.cssText[0] !== '@') return false
     // reset scopecssDisableNextLine
     this.scopecssDisableNextLine = false
-
     return this.keyframesRule() ||
       this.mediaRule() ||
       this.customMediaRule() ||
@@ -178,28 +214,39 @@ class CSSParser {
       this.importRule() ||
       this.charsetRule() ||
       this.namespaceRule() ||
+      this.containerRule() ||
       this.documentRule() ||
       this.pageRule() ||
       this.hostRule() ||
-      this.fontFaceRule()
+      this.fontFaceRule() ||
+      this.layerRule()
   }
+
+  // :global is CSS Modules rule, it will be converted to normal syntax
+  // private matchGlobalRule (): boolean | void {
+  //   if (this.cssText[0] !== ':') return false
+  //   // reset scopecssDisableNextLine
+  //   this.scopecssDisableNextLine = false
+
+  //   return this.globalRule()
+  // }
 
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSKeyframesRule
   private keyframesRule (): boolean | void {
     if (!this.commonMatch(/^@([-\w]+)?keyframes\s*/)) return false
 
-    if (!this.commonMatch(/^[^{]+/)) return parseError('@keyframes missing name', this.linkPath)
+    if (!this.commonMatch(/^[^{]+/)) return this.printError('@keyframes missing name', this.linkPath)
 
     this.matchComments()
 
-    if (!this.matchOpenBrace()) return parseError("@keyframes missing '{'", this.linkPath)
+    if (!this.matchOpenBrace()) return this.printError("@keyframes missing '{'", this.linkPath)
 
     this.matchComments()
     while (this.keyframeRule()) {
       this.matchComments()
     }
 
-    if (!this.matchCloseBrace()) return parseError("@keyframes missing '}'", this.linkPath)
+    if (!this.matchCloseBrace()) return this.printError("@keyframes missing '}'", this.linkPath)
 
     this.matchLeadingSpaces()
 
@@ -251,31 +298,52 @@ class CSSParser {
     return this.commonHandlerForAtRuleWithSelfRule('font-face')
   }
 
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/@layer
+  private layerRule (): boolean | void {
+    if (!this.commonMatch(/^@layer\s*([^{;]+)/)) return false
+
+    if (!this.matchOpenBrace()) return !!this.commonMatch(/^[;]+/)
+
+    this.matchComments()
+
+    this.matchRules()
+
+    if (!this.matchCloseBrace()) return this.printError('@layer missing \'}\'', this.linkPath)
+
+    this.matchLeadingSpaces()
+
+    return true
+  }
+
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSMediaRule
-  private mediaRule = this.createMatcherForAtRuleWithChildRule(/^@media *([^{]+)/, 'media')
+  private mediaRule = this.createMatcherForRuleWithChildRule(/^@media *([^{]+)/, '@media')
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSSupportsRule
-  private supportsRule = this.createMatcherForAtRuleWithChildRule(/^@supports *([^{]+)/, 'supports')
-  private documentRule = this.createMatcherForAtRuleWithChildRule(/^@([-\w]+)?document *([^{]+)/, 'document')
-  private hostRule = this.createMatcherForAtRuleWithChildRule(/^@host\s*/, 'host')
+  private supportsRule = this.createMatcherForRuleWithChildRule(/^@supports *([^{]+)/, '@supports')
+  private documentRule = this.createMatcherForRuleWithChildRule(/^@([-\w]+)?document *([^{]+)/, '@document')
+  private hostRule = this.createMatcherForRuleWithChildRule(/^@host\s*/, '@host')
+  // :global is CSS Modules rule, it will be converted to normal syntax
+  // private globalRule = this.createMatcherForRuleWithChildRule(/^:global([^{]*)/, ':global')
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSImportRule
   private importRule = this.createMatcherForNoneBraceAtRule('import')
   // Removed in most browsers
   private charsetRule = this.createMatcherForNoneBraceAtRule('charset')
   // https://developer.mozilla.org/en-US/docs/Web/API/CSSNamespaceRule
   private namespaceRule = this.createMatcherForNoneBraceAtRule('namespace')
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/@container
+  private containerRule = this.createMatcherForRuleWithChildRule(/^@container *([^{]+)/, '@container')
 
-  // common matcher for @media, @supports, @document, @host
-  private createMatcherForAtRuleWithChildRule (reg: RegExp, name: string): () => boolean | void {
+  // common matcher for @media, @supports, @document, @host, :global, @container
+  private createMatcherForRuleWithChildRule (reg: RegExp, name: string): () => boolean | void {
     return () => {
       if (!this.commonMatch(reg)) return false
 
-      if (!this.matchOpenBrace()) return parseError(`@${name} missing '{'`, this.linkPath)
+      if (!this.matchOpenBrace()) return this.printError(`${name} missing '{'`, this.linkPath)
 
       this.matchComments()
 
       this.matchRules()
 
-      if (!this.matchCloseBrace()) return parseError(`@${name} missing '}'`, this.linkPath)
+      if (!this.matchCloseBrace()) return this.printError(`${name} missing '}'`, this.linkPath)
 
       this.matchLeadingSpaces()
 
@@ -295,11 +363,11 @@ class CSSParser {
 
   // common handler for @font-face, @page
   private commonHandlerForAtRuleWithSelfRule (name: string): boolean | void {
-    if (!this.matchOpenBrace()) return parseError(`@${name} missing '{'`, this.linkPath)
+    if (!this.matchOpenBrace()) return this.printError(`@${name} missing '{'`, this.linkPath)
 
     this.matchAllDeclarations()
 
-    if (!this.matchCloseBrace()) return parseError(`@${name} missing '}'`, this.linkPath)
+    if (!this.matchCloseBrace()) return this.printError(`@${name} missing '}'`, this.linkPath)
 
     this.matchLeadingSpaces()
 
@@ -322,7 +390,7 @@ class CSSParser {
     i += 2
 
     if (this.cssText.charAt(i - 1) === '') {
-      return parseError('End of comment missing', this.linkPath)
+      return this.printError('End of comment missing', this.linkPath)
     }
 
     // get comment content
@@ -371,7 +439,7 @@ class CSSParser {
   }
 
   private matchCloseBrace () {
-    return this.commonMatch(/^}/)
+    return this.commonMatch(/^}\s*/)
   }
 
   // match and slice the leading spaces
@@ -381,11 +449,17 @@ class CSSParser {
 
   // splice string
   private recordResult (strFragment: string): void {
-    // Firefox performance degradation when string contain special characters, see https://github.com/micro-zoe/micro-app/issues/256
+    // Firefox performance degradation when string contain special characters, see https://github.com/jd-opensource/micro-app/issues/256
     if (isFireFox()) {
       this.result += encodeURIComponent(strFragment)
     } else {
       this.result += strFragment
+    }
+  }
+
+  private printError (msg: string, linkPath?: string): void {
+    if (this.cssText.length) {
+      parseError(msg, linkPath)
     }
   }
 }
@@ -429,6 +503,7 @@ let parser: CSSParser
 export default function scopedCSS (
   styleElement: HTMLStyleElement,
   app: AppInterface,
+  linkPath?: string,
 ): HTMLStyleElement {
   if (app.scopecss) {
     const prefix = createPrefix(app.name)
@@ -441,8 +516,18 @@ export default function scopedCSS (
         app.name,
         prefix,
         app.url,
-        styleElement.__MICRO_APP_LINK_PATH__,
+        linkPath,
       )
+      const observer = new MutationObserver(() => {
+        const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const isPrefixed = styleElement.textContent && new RegExp(escapedPrefix).test(styleElement.textContent)
+        observer.disconnect()
+        if (!isPrefixed) {
+          styleElement.__MICRO_APP_HAS_SCOPED__ = false
+        }
+        scopedCSS(styleElement, app, linkPath)
+      })
+      observer.observe(styleElement, { childList: true, characterData: true })
     } else {
       const observer = new MutationObserver(function () {
         observer.disconnect()
@@ -453,7 +538,7 @@ export default function scopedCSS (
             app.name,
             prefix,
             app.url,
-            styleElement.__MICRO_APP_LINK_PATH__,
+            linkPath,
           )
         }
       })
