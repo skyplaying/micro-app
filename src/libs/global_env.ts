@@ -1,87 +1,133 @@
-import { isSupportModuleScript, isBrowser } from './utils'
-
-type RequestIdleCallbackOptions = {
-  timeout: number
-}
-
-type RequestIdleCallbackInfo = {
-  readonly didTimeout: boolean
-  timeRemaining: () => number
-}
+import type {
+  RequestIdleCallbackInfo,
+  RequestIdleCallbackOptions,
+} from '@micro-app/types'
+import {
+  isSupportModuleScript,
+  isBrowser,
+  getCurrentAppName,
+  assign,
+} from './utils'
+import {
+  rejectMicroAppStyle,
+} from '../source/patch'
+import {
+  updateElementInfo,
+} from '../sandbox/adapter'
 
 declare global {
+  interface Node {
+    __MICRO_APP_NAME__?: string | null
+    __PURE_ELEMENT__?: boolean
+    __MICRO_APP_HAS_DPN__?: boolean
+    data?: unknown
+    rawParentNode?: ParentNode | null
+  }
+
+  interface HTMLStyleElement {
+    __MICRO_APP_HAS_SCOPED__?: boolean
+  }
+
   interface Window {
     requestIdleCallback (
       callback: (info: RequestIdleCallbackInfo) => void,
       opts?: RequestIdleCallbackOptions,
     ): number
     _babelPolyfill: boolean
-    proxyWindow?: WindowProxy
     __MICRO_APP_ENVIRONMENT__?: boolean
     __MICRO_APP_UMD_MODE__?: boolean
     __MICRO_APP_BASE_APPLICATION__?: boolean
-  }
-  interface Element {
-    __MICRO_APP_NAME__?: string
-    data?: any
-  }
-  interface Node {
-    __MICRO_APP_NAME__?: string
-  }
-  interface HTMLStyleElement {
-    linkpath?: string
+    __REACT_ERROR_OVERLAY_GLOBAL_HOOK__: boolean
+    rawLocation: Location
+    rawWindow: any
+    rawDocument: any
   }
 }
 
-const globalEnv: Record<string, any> = {}
+const globalEnv: Record<string, any> = {
+  // active sandbox count
+  activeSandbox: 0,
+}
 
+/**
+ * Note loop nesting
+ * Only prototype or unique values can be put here
+ */
 export function initGlobalEnv (): void {
   if (isBrowser) {
-    /**
-     * save patch raw methods
-     * pay attention to this binding
-     */
-    const rawSetAttribute = Element.prototype.setAttribute
-    const rawAppendChild = Node.prototype.appendChild
-    const rawInsertBefore = Node.prototype.insertBefore
-    const rawReplaceChild = Node.prototype.replaceChild
-    const rawRemoveChild = Node.prototype.removeChild
-    const rawAppend = Element.prototype.append
-    const rawPrepend = Element.prototype.prepend
+    const rawWindow = window.rawWindow || Function('return window')()
+    const rawDocument = window.rawDocument || Function('return document')()
+    const rawRootDocument = rawWindow.Document || Function('return Document')()
+    const rawRootElement = rawWindow.Element
+    const rawRootNode = rawWindow.Node
+    const rawRootEventTarget = rawWindow.EventTarget
+    const rawDocumentFragment = rawWindow.DocumentFragment
 
-    const rawCreateElement = Document.prototype.createElement
-    const rawCreateElementNS = Document.prototype.createElementNS
-    const rawCreateDocumentFragment = Document.prototype.createDocumentFragment
-    const rawQuerySelector = Document.prototype.querySelector
-    const rawQuerySelectorAll = Document.prototype.querySelectorAll
-    const rawGetElementById = Document.prototype.getElementById
-    const rawGetElementsByClassName = Document.prototype.getElementsByClassName
-    const rawGetElementsByTagName = Document.prototype.getElementsByTagName
-    const rawGetElementsByName = Document.prototype.getElementsByName
+    // save patch raw methods, pay attention to this binding
+    const rawAppendChild = rawRootNode.prototype.appendChild
+    const rawInsertBefore = rawRootNode.prototype.insertBefore
+    const rawReplaceChild = rawRootNode.prototype.replaceChild
+    const rawRemoveChild = rawRootNode.prototype.removeChild
+    const rawSetAttribute = rawRootElement.prototype.setAttribute
+    const rawAppend = rawRootElement.prototype.append
+    const rawPrepend = rawRootElement.prototype.prepend
+    const rawFragmentAppend = rawDocumentFragment.prototype.append
+    const rawFragmentPrepend = rawDocumentFragment.prototype.prepend
+    const rawCloneNode = rawRootNode.prototype.cloneNode
+    const rawElementQuerySelector = rawRootElement.prototype.querySelector
+    const rawElementQuerySelectorAll = rawRootElement.prototype.querySelectorAll
+    const rawInsertAdjacentElement = rawRootElement.prototype.insertAdjacentElement
+    const rawInnerHTMLDesc = Object.getOwnPropertyDescriptor(rawRootElement.prototype, 'innerHTML')
+    const rawParentNodeDesc = Object.getOwnPropertyDescriptor(rawRootNode.prototype, 'parentNode')
 
-    const rawWindow = Function('return window')()
-    const rawDocument = Function('return document')()
-    const supportModuleScript = isSupportModuleScript()
-    const templateStyle: HTMLStyleElement = rawDocument.body.querySelector('#micro-app-template-style')
+    // Document proto methods
+    const rawCreateElement = rawRootDocument.prototype.createElement
+    const rawCreateElementNS = rawRootDocument.prototype.createElementNS
+    const rawCreateTextNode = rawRootDocument.prototype.createTextNode
+    const rawCreateDocumentFragment = rawRootDocument.prototype.createDocumentFragment
+    const rawCreateComment = rawRootDocument.prototype.createComment
+    const rawQuerySelector = rawRootDocument.prototype.querySelector
+    const rawQuerySelectorAll = rawRootDocument.prototype.querySelectorAll
+    const rawGetElementById = rawRootDocument.prototype.getElementById
+    const rawGetElementsByClassName = rawRootDocument.prototype.getElementsByClassName
+    const rawGetElementsByTagName = rawRootDocument.prototype.getElementsByTagName
+    const rawGetElementsByName = rawRootDocument.prototype.getElementsByName
+
+    // TODO: 将ImageProxy移出去
+    const ImageProxy = new Proxy(rawWindow.Image, {
+      construct (Target, args): HTMLImageElement {
+        return updateElementInfo(new Target(...args), getCurrentAppName())
+      },
+    })
 
     /**
      * save effect raw methods
      * pay attention to this binding, especially setInterval, setTimeout, clearInterval, clearTimeout
      */
-    const rawWindowAddEventListener = rawWindow.addEventListener
-    const rawWindowRemoveEventListener = rawWindow.removeEventListener
     const rawSetInterval = rawWindow.setInterval
     const rawSetTimeout = rawWindow.setTimeout
     const rawClearInterval = rawWindow.clearInterval
     const rawClearTimeout = rawWindow.clearTimeout
-
-    const rawDocumentAddEventListener = rawDocument.addEventListener
-    const rawDocumentRemoveEventListener = rawDocument.removeEventListener
+    const rawPushState = rawWindow.history.pushState
+    const rawReplaceState = rawWindow.history.replaceState
+    const rawAddEventListener = rawRootEventTarget.prototype.addEventListener
+    const rawRemoveEventListener = rawRootEventTarget.prototype.removeEventListener
+    const rawDispatchEvent = rawRootEventTarget.prototype.dispatchEvent
 
     // mark current application as base application
     window.__MICRO_APP_BASE_APPLICATION__ = true
 
-    Object.assign(globalEnv, {
+    assign(globalEnv, {
+      supportModuleScript: isSupportModuleScript(),
+
+      // common global vars
+      rawWindow,
+      rawDocument,
+      rawRootDocument,
+      rawRootElement,
+      rawRootNode,
+      rawDocumentFragment,
+
       // source/patch
       rawSetAttribute,
       rawAppendChild,
@@ -90,32 +136,44 @@ export function initGlobalEnv (): void {
       rawRemoveChild,
       rawAppend,
       rawPrepend,
+      rawFragmentAppend,
+      rawFragmentPrepend,
+      rawCloneNode,
+      rawElementQuerySelector,
+      rawElementQuerySelectorAll,
+      rawInsertAdjacentElement,
+      rawInnerHTMLDesc,
+      rawParentNodeDesc,
+
       rawCreateElement,
       rawCreateElementNS,
       rawCreateDocumentFragment,
+      rawCreateTextNode,
+      rawCreateComment,
       rawQuerySelector,
       rawQuerySelectorAll,
       rawGetElementById,
       rawGetElementsByClassName,
       rawGetElementsByTagName,
       rawGetElementsByName,
-
-      // common global vars
-      rawWindow,
-      rawDocument,
-      supportModuleScript,
-      templateStyle,
+      ImageProxy,
 
       // sandbox/effect
-      rawWindowAddEventListener,
-      rawWindowRemoveEventListener,
       rawSetInterval,
       rawSetTimeout,
       rawClearInterval,
       rawClearTimeout,
-      rawDocumentAddEventListener,
-      rawDocumentRemoveEventListener,
+      rawPushState,
+      rawReplaceState,
+      rawAddEventListener,
+      rawRemoveEventListener,
+      rawDispatchEvent,
+
+      // iframe
     })
+
+    // global effect
+    rejectMicroAppStyle()
   }
 }
 

@@ -2,7 +2,7 @@
 
 ### clone & run project
 ```bash
-git clone https://github.com/micro-zoe/micro-app.git
+git clone https://github.com/jd-opensource/micro-app.git
 
 cd micro-app
 
@@ -31,14 +31,14 @@ yarn build:watch
 
 2、enter the base application and start
 ```
-cd examples/main-react16/
+cd dev/main-react16/
 
 yarn start
 ```
 
 3、enter a sub application and start it
 ```
-cd examples/children/react16
+cd dev/children/react16
 
 yarn start
 ```

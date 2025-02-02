@@ -2,32 +2,46 @@
 
 **举个栗子🌰 :**
 
-基座应用和子应用都有一个元素`<div id='root'></div>`，此时子应用通过`document.querySelector('#root')`获取到的一定是自己内部的`#root`元素，而不是基座应用的。
+主应用和子应用都有一个元素`<div id='root'></div>`，此时子应用通过`document.querySelector('#root')`获取到的是自己内部的`#root`元素，而不是主应用的。
 
-**基座应用可以获取子应用的元素吗？**
+**主应用可以获取子应用的元素吗？**
 
 可以的！
 
-这一点和ShadowDom不同，在微前端下基座拥有统筹全局的作用，所以我们没有对基座应用操作子应用元素的行为进行限制。
+这一点和ShadowDom不同，在微前端下主应用拥有统筹全局的作用，所以我们没有对主应用操作子应用元素的行为进行限制。
 
 ### 解除元素绑定
-默认情况下，当子应用操作元素时会绑定元素作用域，而解绑过程是异步的，这可能会导致渲染出错，此时可以主动解除元素绑定来避免这个问题。
+默认情况下，当子应用操作元素时会绑定元素作用域，而解绑过程是异步的，这可能会导致操作元素异常。
 
-执行`removeDomScope`方法后，元素作用域会重置为基座应用。
+**常见问题：**主应用元素错误插入到子应用`<micro-app>`元素内部。
 
+**解决方法：**使用`removeDomScope`方法解除元素绑定。
+
+具体方式如下：
 <!-- tabs:start -->
-#### ** 基座应用 **
+#### ** 主应用 **
 ```js
 import { removeDomScope } from '@micro-zoe/micro-app'
 
-// 重置作用域
-removeDomScope()
+removeDomScope(true) // 解除元素绑定
+/**
+ * 中间区域的元素操作都指向主应用
+ * 例如：
+ * document.body.appendChild(document.createElement('div')) 
+ * div元素将插入到主应用body中
+ */
+removeDomScope(false) // 恢复元素绑定
 ```
 
 #### ** 子应用 **
 ```js
-// 重置作用域
-window.removeDomScope?.()
+window.microApp.removeDomScope(true) // 解除元素绑定
+/**
+ * 中间区域的元素操作都指向主应用
+ * 例如：
+ * document.body.appendChild(document.createElement('div')) 
+ * div元素将插入到主应用body中
+ */
+window.microApp.removeDomScope(false) // 恢复元素绑定
 ```
 <!-- tabs:end -->
-
